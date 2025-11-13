@@ -1,0 +1,13 @@
+streamlit==1.39.0
+pydantic==2.9.2
+python-dateutil==2.9.0
+pandas==2.2.2
+openpyxl==3.1.5
+openai==1.46.0
+python-dotenv==1.0.1
+tenacity==8.2.3
+anthropic>=0.18.0
+httpx[socks]==0.27.0
+pytz>=2024.1
+pyyaml>=6.0
+
