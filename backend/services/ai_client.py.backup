@@ -1,0 +1,99 @@
+# backend/services/ai_client.py
+import os
+from pathlib import Path
+from dataclasses import dataclass
+
+from dotenv import load_dotenv
+from openai import OpenAI
+
+# 可靠加载 .env
+ROOT = Path(__file__).resolve().parents[2]
+for cand in (ROOT / ".env", ROOT / "app" / ".env", Path.cwd() / ".env"):
+    if cand.exists():
+        load_dotenv(dotenv_path=cand, override=True)
+        break
+
+
+@dataclass
+class AIConfig:
+    provider: str = None
+    api_key: str = None
+    base_url: str = None
+    model: str = None
+    temperature: float = None
+
+    def __post_init__(self):
+        """自动识别硅基 / OpenAI"""
+        if self.provider is None and self.api_key is None:
+            if os.getenv("SILICONFLOW_API_KEY"):
+                self.provider = "siliconflow"
+                self.api_key = os.getenv("SILICONFLOW_API_KEY")
+                self.base_url = os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1")
+                self.model = os.getenv("AI_MODEL", "Qwen2.5-32B-Instruct")
+                self.temperature = float(os.getenv("AI_TEMPERATURE", "0.7"))
+            elif os.getenv("OPENAI_API_KEY"):
+                self.provider = "openai"
+                self.api_key = os.getenv("OPENAI_API_KEY")
+                self.base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+                self.model = os.getenv("AI_MODEL", "gpt-4o-mini")
+                self.temperature = float(os.getenv("AI_TEMPERATURE", "0.7"))
+            else:
+                raise RuntimeError("未配置 API Key")
+
+
+def fix_messages_for_siliconflow(messages):
+    """
+    SiliconFlow 不支持 role=developer，不支持 response_format。
+    自动修正为 system + user 结构。
+    """
+    fixed = []
+    for m in messages:
+        role = m.get("role", "")
+
+        if role == "developer":
+            # developer → system（最兼容）
+            fixed.append({"role": "system", "content": m["content"]})
+        else:
+            fixed.append(m)
+
+    return fixed
+
+
+def get_client_and_cfg():
+    """统一创建 client（使用新版 OpenAI SDK）"""
+    cfg = AIConfig()
+    client = OpenAI(
+        base_url=cfg.base_url,
+        api_key=cfg.api_key
+    )
+    return client, cfg
+
+
+def chat_completion(client, cfg, messages, **kwargs):
+    """
+    🚀 统一入口：硅基自动修复 messages
+    使用新版 OpenAI SDK: client.chat.completions.create(...)
+    """
+    if cfg.provider == "siliconflow":
+        messages = fix_messages_for_siliconflow(messages)
+    kwargs.pop("response_format", None)
+
+    params = {
+        "model": kwargs.pop("model", getattr(cfg, "model", None)),
+        "messages": messages,
+        "temperature": kwargs.pop("temperature", getattr(cfg, "temperature", 0.7)),
+    }
+    if "max_tokens" in kwargs:
+        params["max_tokens"] = kwargs.pop("max_tokens")
+    params.update(kwargs)
+    params = {k: v for k, v in params.items() if v is not None}
+
+    response = client.chat.completions.create(**params)
+    # 转换为旧格式以保持兼容性
+    return {
+        "choices": [{
+            "message": {
+                "content": response.choices[0].message.content
+            }
+        }]
+    }

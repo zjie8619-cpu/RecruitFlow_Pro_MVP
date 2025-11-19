@@ -13,7 +13,7 @@ def _stability(years: float, companies: str) -> float:
     return min(years/(c*3.0), 1.0)
 
 def _growth(text: str) -> float:
-    kws = ["复盘","证书","学习","培训","带队","负责","主导","从0到1","增长","ROI","转化"]
+#     kws = ["复盘","证书","学习","培训","带队","负责","主导","从0到1","增长","ROI","转化"]
     return min(1.0, len(contains_any(text, kws))/5.0)
 
 def compute_scores(job_rule: Dict, row: Dict, weights: Dict[str,float], whitelist: List[str], evidence_max: int=3) -> Tuple[Dict, List[str], float]:
@@ -45,9 +45,9 @@ def compute_scores(job_rule: Dict, row: Dict, weights: Dict[str,float], whitelis
 
     evidence=[]
     for kw in must + nice:
-        if kw and kw in text_all: evidence.append(f"命中：{kw}")
+#         if kw and kw in text_all: evidence.append(f"命中:{kw}")
         if len(evidence)>=evidence_max: break
-    if excluded_hits: evidence.append("触发排除：" + ",".join(excluded_hits))
+#     if excluded_hits: evidence.append("触发排除:" + ",".join(excluded_hits))
 
     return {'score_total': total,'skill_fit': round(skill_fit,4),'exp_relevance': round(exp_rel,4),'stability': round(stability,4),'growth': round(growth,4)}, evidence, round(confidence,4)
 

@@ -10,7 +10,7 @@ def main():
     for job in ["课程顾问","教学运营专员","教研编辑"]:
         jd_long, jd_short, rubric = pipe.generate_jd(job)
         pipe.save_jd(job, jd_long, jd_short, rubric)
-    print("Seed 完成：样例简历入库 & JD 生成。")
+    print("Seed 完成：样例简历入�?& JD 生成�?)
 
 if __name__ == "__main__":
     main()

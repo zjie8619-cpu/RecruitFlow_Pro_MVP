@@ -5,7 +5,7 @@ AI_MODEL=Qwen2.5-32B-Instruct
 AI_TEMPERATURE=0.7
 """
 
-# 写入根目录
+# 写入根目�?
 with open('.env', 'w', encoding='utf-8') as f:
     f.write(env_content)
 
@@ -13,6 +13,6 @@ with open('.env', 'w', encoding='utf-8') as f:
 import shutil
 shutil.copy('.env', 'app/.env')
 
-print("已更新.env文件（根目录和app目录）")
+print("已更�?env文件（根目录和app目录�?)
 print("模型: Qwen2.5-32B-Instruct")
 

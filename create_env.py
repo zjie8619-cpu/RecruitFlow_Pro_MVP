@@ -11,8 +11,8 @@ AI_TEMPERATURE=0.7
 with open('.env', 'w', encoding='utf-8') as f:
     f.write(env_content)
 
-print("已创建.env文件（UTF-8无BOM）")
-print("文件内容：")
+print("已创�?env文件（UTF-8无BOM�?)
+print("文件内容�?)
 with open('.env', 'r', encoding='utf-8') as f:
     print(f.read())
 
