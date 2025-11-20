@@ -5,7 +5,7 @@ if sys.platform == 'win32':
     import io
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
-from backend.services.ai_client import get_client_and_cfg
+from backend.services.ai_client import get_client_and_cfg, chat_completion
 
 try:
     print("[TEST] 正在测试AI连接...")
@@ -18,8 +18,9 @@ try:
     print(f"   Key前缀: {cfg.api_key[:15]}...")
     
     print(f"\n[TEST] 正在调用AI...")
-    res = client.chat.completions.create(
-        model=cfg.model,
+    res = chat_completion(
+        client,
+        cfg,
         messages=[{"role":"user","content":"只返回 OK"}],
         temperature=0,
         max_tokens=10

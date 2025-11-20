@@ -1,4 +1,10 @@
-import streamlit as st, pandas as pd, json, time
+import json
+import os
+import re
+import time
+
+import pandas as pd
+import streamlit as st
 from datetime import datetime
 from pathlib import Path
 from backend.storage.db import init_db, get_db
@@ -11,9 +17,8 @@ from backend.services.resume_parser import parse_uploaded_files_to_df
 from backend.services.ai_matcher import ai_match_resumes_df
 from backend.services.ai_core import generate_ai_summary, generate_ai_email
 from backend.services.calendar_utils import create_ics_file
+from backend.services.excel_exporter import generate_competency_excel
 from dotenv import load_dotenv
-from pathlib import Path
-import os
 
 # 尝试从多个位置加载.env文件
 env_paths = [
@@ -160,6 +165,47 @@ with tab1:
                 try:
                     with st.spinner("🤖 AI正在智能分析岗位需求，生成专业JD、能力维度、面试题目，请稍候（通常需要10-30秒）..."):
                         bundle = generate_jd_bundle(ai_job, ai_must, ai_nice, ai_excl)
+                        # 基于长版 JD 再做一次“短版JD提取 + 任职要求抽取能力与面试题”
+                        from backend.services.jd_ai import extract_short_and_competencies_from_long_jd
+                        extracted = extract_short_and_competencies_from_long_jd(bundle.get("jd_long",""), ai_job)
+                        if extracted:
+                            # 用抽取得到的短版 JD 覆盖
+                            if extracted.get("short_jd"):
+                                bundle["jd_short"] = extracted["short_jd"]
+                            # 用抽取得到的能力维度/面试题覆盖展示（转换为内部格式）
+                            dims = []
+                            for d in extracted.get("能力维度", []):
+                                anchors = d.get("评分锚点") or {}
+                                dims.append({
+                                    "name": d.get("维度名称", ""),
+                                    "weight": round(float(d.get("权重", 0)) / 100.0, 4),
+                                    "desc": d.get("定义", ""),
+                                    "anchors": {
+                                        "20": anchors.get("20") or "基础达成：请结合 JD 中的基础要求描述。",
+                                        "60": anchors.get("60") or "良好达成：能够稳定产出并不断优化。",
+                                        "100": anchors.get("100") or "优秀达成：持续输出杰出成果并量化影响。",
+                                    },
+                                })
+                            if dims:
+                                bundle["dimensions"] = dims
+                            qs = []
+                            for q in extracted.get("能力维度_面试题", []):
+                                raw_points = q.get("评分要点", [])
+                                if isinstance(raw_points, str):
+                                    points_list = [p.strip() for p in re.split(r"[；;、\n]", raw_points) if p.strip()]
+                                else:
+                                    points_list = [str(p).strip() for p in (raw_points or []) if str(p).strip()]
+                                question_text = q.get("面试题", "")
+                                if isinstance(question_text, list):
+                                    question_text = "；".join(str(item).strip() for item in question_text if str(item).strip())
+                                qs.append({
+                                    "dimension": q.get("维度名称", ""),
+                                    "question": question_text,
+                                    "points": points_list,
+                                    "score": float(q.get("分值", 0)),
+                                })
+                            if qs:
+                                bundle["interview"] = qs
                     # ✅ 持久化：后续其它按钮/区域可复用
                     st.session_state["ai_bundle"] = bundle
                     st.success("✅ AI 生成完成")
@@ -191,36 +237,52 @@ with tab1:
         
             # 1️⃣ 生成岗位能力维度表 df_dimensions（含分值计算逻辑）
             st.subheader("🎯 岗位能力维度（AI 分析）")
-            dims_df = pd.DataFrame(bundle["dimensions"])
-            dims_df["权重(%)"] = (dims_df["weight"] * 100).round(1)
-            df_dimensions = dims_df[["name", "desc", "权重(%)"]].rename(columns={"name": "能力维度", "desc": "说明"})
-            
-            # 计算总权重（防止小数误差）
-            total_weight = df_dimensions["权重(%)"].sum()
-            
-            # ✨ 核心逻辑：分值 = 权重 × 100 / 总权重
-            df_dimensions["分值"] = df_dimensions["权重(%)"].apply(
-                lambda w: round(w * 100 / total_weight, 1)
-            )
-            
-            # 校验总分 ≈ 100（容差 ±0.1）
-            sum_score = round(df_dimensions["分值"].sum(), 1)
-            if abs(sum_score - 100) > 0.1:
-                st.warning(f"⚠️ 当前分值总和为 {sum_score}，已自动标准化。")
-                # 自动调整比例修正
-                df_dimensions["分值"] = df_dimensions["分值"] * 100 / sum_score
-                df_dimensions["分值"] = df_dimensions["分值"].round(1)
-            
-            # 2️⃣ 显示岗位能力维度表
+            question_map = {q.get("dimension"): q for q in bundle.get("interview", [])}
+            competency_rows = []
+            for dim in bundle["dimensions"]:
+                anchors = dim.get("anchors") or {}
+                question_entry = question_map.get(dim.get("name")) or {}
+                question_text = question_entry.get("question")
+                if isinstance(question_text, list):
+                    question_text = "\n".join(str(item).strip() for item in question_text if str(item).strip())
+                question_text = question_text or ""
+                points_data = question_entry.get("points") or []
+                if isinstance(points_data, str):
+                    points_text = "\n".join(p.strip() for p in re.split(r"[；;、\n]", points_data) if p.strip())
+                else:
+                    points_text = "\n".join(str(p).strip() for p in points_data if str(p).strip())
+                competency_rows.append({
+                    "能力维度": dim.get("name", ""),
+                    "说明": dim.get("desc", ""),
+                    "权重(%)": round(float(dim.get("weight", 0)) * 100, 1),
+                    "面试问题": question_text,
+                    "评分要点": points_text,
+                    "20分行为表现": anchors.get("20", ""),
+                    "60分行为表现": anchors.get("60", ""),
+                    "100分行为表现": anchors.get("100", ""),
+                })
+
+            df_dimensions = pd.DataFrame(competency_rows)
             st.dataframe(df_dimensions, use_container_width=True)
-        
-            with st.expander("🔎 评分锚点（各维度 1/3/5 分行为示例）"):
+
+            # 导出 Excel
+            excel_bytes = generate_competency_excel(bundle["dimensions"], bundle.get("interview", []))
+            download_name = f"{(st.session_state.get('job_name') or '岗位').strip()}_能力维度评分表.xlsx"
+            st.download_button(
+                "📄 导出能力维度评分表（Excel）",
+                data=excel_bytes,
+                file_name=download_name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
+            with st.expander("🔎 评分锚点（20 / 60 / 100 分行为示例）"):
                 for d in bundle["dimensions"]:
                     anchors = d.get("anchors") or {}
                     st.markdown(f"**{d['name']}**")
-                    st.markdown(f"- **5 分**：{anchors.get('5','（未提供）')}")
-                    st.markdown(f"- **3 分**：{anchors.get('3','（未提供）')}")
-                    st.markdown(f"- **1 分**：{anchors.get('1','（未提供）')}")
+                    st.markdown(f"- **20 分**：{anchors.get('20', '（未提供）')}")
+                    st.markdown(f"- **60 分**：{anchors.get('60', '（未提供）')}")
+                    st.markdown(f"- **100 分**：{anchors.get('100', '（未提供）')}")
                     st.markdown("---")
         
             # ------------------ 默认生成函数（修复ImportError用） ------------------
@@ -378,7 +440,7 @@ with tab1:
     
     # ==== AI 连接诊断（放在页面底部）====
     with st.expander("🔧 AI 连接诊断（打不开就点我）"):
-        from backend.services.ai_client import get_client_and_cfg, AIConfig
+        from backend.services.ai_client import get_client_and_cfg, AIConfig, chat_completion
         
         cfg = AIConfig()
         key_present = bool(cfg.api_key)
@@ -393,8 +455,9 @@ with tab1:
             try:
                 client, cfg = get_client_and_cfg()
                 with st.spinner("正在测试连接..."):
-                    res = client.chat.completions.create(
-                        model=cfg.model,
+                    res = chat_completion(
+                        client,
+                        cfg,
                         messages=[{"role":"user","content":"只返回 OK"}],
                         temperature=0,
                         max_tokens=10
@@ -574,8 +637,10 @@ with tab2:
                 if not jd_text.strip():
                     st.warning("请先填写/粘贴岗位 JD。")
                 else:
+                    # 获取岗位名称，用于岗位级清洗逻辑
+                    job_title = st.session_state.get("job_name", "")
                     with st.spinner("AI 正在智能分析匹配度，请稍候…"):
-                        scored_df = ai_match_resumes_df(jd_text, resumes_df)
+                        scored_df = ai_match_resumes_df(jd_text, resumes_df, job_title)
                     st.dataframe(
                         scored_df[[
                             "candidate_id",

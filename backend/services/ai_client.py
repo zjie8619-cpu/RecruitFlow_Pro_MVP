@@ -7,7 +7,7 @@ import httpx
 from dotenv import load_dotenv
 from openai import OpenAI
 
-# 1) 可靠加载 .env（优先根/.env → app/.env → 当前目录/.env）
+# 可靠加载 .env
 ROOT = Path(__file__).resolve().parents[2]
 for cand in (ROOT / ".env", ROOT / "app" / ".env", Path.cwd() / ".env"):
     if cand.exists():
@@ -24,36 +24,47 @@ class AIConfig:
     temperature: float = None
 
     def __post_init__(self):
-        """支持无参初始化：自动从环境变量装填；若没配 Key，也返回占位。"""
+        """自动识别硅基 / OpenAI"""
         if self.provider is None and self.api_key is None:
             if os.getenv("SILICONFLOW_API_KEY"):
                 self.provider = "siliconflow"
                 self.api_key = os.getenv("SILICONFLOW_API_KEY")
                 self.base_url = os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1")
-                self.model = os.getenv("AI_MODEL", os.getenv("SILICONFLOW_MODEL", "gpt-4o-mini"))
+                self.model = os.getenv("AI_MODEL", "Qwen2.5-32B-Instruct")
                 self.temperature = float(os.getenv("AI_TEMPERATURE", "0.7"))
             elif os.getenv("OPENAI_API_KEY"):
                 self.provider = "openai"
                 self.api_key = os.getenv("OPENAI_API_KEY")
                 self.base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-                self.model = os.getenv("AI_MODEL", os.getenv("OPENAI_MODEL", "gpt-4"))
-                self.temperature = float(os.getenv("AI_TEMPERATURE", "0.7"))
-            else:
-                self.provider = ""
-                self.api_key = ""
-                self.base_url = ""
                 self.model = os.getenv("AI_MODEL", "gpt-4o-mini")
                 self.temperature = float(os.getenv("AI_TEMPERATURE", "0.7"))
+            else:
+                raise RuntimeError("未配置 API Key")
+
+
+def fix_messages_for_siliconflow(messages):
+    """
+    SiliconFlow 不支持 role=developer，不支持 response_format。
+    自动修正为 system + user 结构。
+    """
+    fixed = []
+    for m in messages:
+        role = m.get("role", "")
+
+        if role == "developer":
+            # developer → system（最兼容）
+            fixed.append({"role": "system", "content": m["content"]})
+        else:
+            fixed.append(m)
+
+    return fixed
 
 
 def get_client_and_cfg():
-    """用于真正发起请求：没有 Key 就抛错；有代理则用 httpx 客户端。"""
-
+    """统一创建 client"""
     cfg = AIConfig()
-    if not cfg.api_key:
-        raise RuntimeError("未检测到 API Key：请在项目根目录 `.env` 写入 SILICONFLOW_API_KEY 或 OPENAI_API_KEY（重启生效）。")
-
     proxy = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+
     if proxy:
         http_client = httpx.Client(proxies=proxy, timeout=60.0)
         client = OpenAI(api_key=cfg.api_key, base_url=cfg.base_url, http_client=http_client)
@@ -61,3 +72,18 @@ def get_client_and_cfg():
         client = OpenAI(api_key=cfg.api_key, base_url=cfg.base_url)
 
     return client, cfg
+
+
+def chat_completion(client, cfg, messages, **kwargs):
+    """
+    🚀 统一入口：硅基自动修复 messages
+    """
+    if cfg.provider == "siliconflow":
+        messages = fix_messages_for_siliconflow(messages)
+        kwargs.pop("response_format", None)   # 删除不支持的字段
+
+    return client.chat.completions.create(
+        model=cfg.model,
+        messages=messages,
+        **kwargs
+    )

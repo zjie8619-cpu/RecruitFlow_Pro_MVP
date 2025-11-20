@@ -2,6 +2,7 @@
 import os
 import sys
 from openai import OpenAI
+from backend.services.ai_client import chat_completion, AIConfig
 from dotenv import load_dotenv
 
 # 设置输出编码
@@ -27,10 +28,18 @@ print(f"   模型: {model}")
 print(f"\n[TEST] 正在测试AI连通性...")
 
 client = OpenAI(api_key=key, base_url=base)
+cfg = AIConfig(
+    provider="siliconflow" if os.getenv("SILICONFLOW_API_KEY") else "openai",
+    api_key=key,
+    base_url=base,
+    model=model,
+    temperature=0.0,
+)
 
 try:
-    res = client.chat.completions.create(
-        model=model,
+    res = chat_completion(
+        client,
+        cfg,
         messages=[{"role":"user","content":"只返回 OK"}],
         temperature=0,
         max_tokens=10

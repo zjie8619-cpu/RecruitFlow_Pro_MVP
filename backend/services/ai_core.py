@@ -1,7 +1,7 @@
 import json
 from typing import Any, Dict
 
-from backend.services.ai_client import get_client_and_cfg
+from backend.services.ai_client import get_client_and_cfg, chat_completion
 
 
 def _call_chat(messages, temperature: float = 0.6) -> str:
@@ -9,8 +9,9 @@ def _call_chat(messages, temperature: float = 0.6) -> str:
     model = getattr(cfg, "model", None) or (cfg.get("model") if isinstance(cfg, dict) else None) or "gpt-4o-mini"
     temp = temperature if temperature is not None else getattr(cfg, "temperature", 0.6)
 
-    res = client.chat.completions.create(
-        model=model,
+    res = chat_completion(
+        client,
+        cfg,
         messages=messages,
         temperature=temp,
     )
