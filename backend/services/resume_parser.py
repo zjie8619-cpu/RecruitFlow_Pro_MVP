@@ -56,6 +56,48 @@ def extract_contacts(text: str) -> Dict[str, str]:
     return {"email": email, "phone": phone}
 
 
+NAME_PATTERNS = [
+    re.compile(r"(?:姓名|Name)[:：\s]*([\u4e00-\u9fa5·]{2,8})"),
+    re.compile(r"^([\u4e00-\u9fa5·]{2,8})[，,。\s]*(?:男|女)\b", re.MULTILINE),
+    re.compile(r"^\s*([\u4e00-\u9fa5·]{2,6})\s*(?:\d{2}|19|20)\d{2}", re.MULTILINE),
+]
+
+
+def _extract_name_from_text(text: str) -> str:
+    if not text:
+        return ""
+    for pattern in NAME_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return match.group(1)
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    for line in lines[:8]:
+        tokens = re.findall(r"[\u4e00-\u9fa5·]{2,6}", line)
+        for token in tokens:
+            if token and 1 < len(token) <= 6 and token not in ("课程顾问", "物理竞赛", "数学竞赛"):
+                return token
+    return ""
+
+
+def _extract_name_from_filename(filename: str) -> str:
+    stem = Path(filename).stem
+    stem = re.sub(r"^[\[\(（【].*?[\]\)）】]", "", stem).strip()
+    stem = re.sub(r"[\(\（][^)\）]*[\)\）]", "", stem)
+    stem = stem.replace("_", " ").replace("-", " ")
+    tokens = re.findall(r"[\u4e00-\u9fa5·]{2,6}", stem)
+    for token in tokens:
+        if token and token not in ("课程顾问", "物理竞赛", "数学竞赛", "班主任"):
+            return token
+    return ""
+
+
+def infer_candidate_name(text: str, filename: str) -> str:
+    name = _extract_name_from_text(text)
+    if name:
+        return name
+    return _extract_name_from_filename(filename)
+
+
 def extract_pdf_text(path: Path) -> str:
     """提取PDF文本,使用多种方法确保成功"""
     text = ""
@@ -269,11 +311,13 @@ def parse_uploaded_files_to_df(files: List, max_chars: int = 20000) -> pd.DataFr
         
         # 限制文本长度
         text = text[:max_chars] if text else ""
+        candidate_name = infer_candidate_name(text, tmp_path.name)
         
         rows.append(
             {
                 "candidate_id": cid,
                 "file": tmp_path.name,
+                "name": candidate_name,
                 "resume_text": text,
                 "text_len": len(text),
                 "email": contacts.get("email", ""),
@@ -284,7 +328,7 @@ def parse_uploaded_files_to_df(files: List, max_chars: int = 20000) -> pd.DataFr
 
     df = pd.DataFrame(rows)
     if df.empty:
-        return pd.DataFrame(columns=["candidate_id", "file", "resume_text", "text_len", "email", "phone"])
+        return pd.DataFrame(columns=["candidate_id", "file", "name", "resume_text", "text_len", "email", "phone"])
 
     source_columns = ["resume_text", "text", "full_text", "content", "parsed_text"]
 
@@ -383,11 +427,13 @@ def parse_uploaded_files_to_df(files: List, max_chars: int = 20000) -> pd.DataFr
         
         # 限制文本长度
         text = text[:max_chars] if text else ""
+        candidate_name = infer_candidate_name(text, tmp_path.name)
         
         rows.append(
             {
                 "candidate_id": cid,
                 "file": tmp_path.name,
+                "name": candidate_name,
                 "resume_text": text,
                 "text_len": len(text),
                 "email": contacts.get("email", ""),
@@ -398,7 +444,7 @@ def parse_uploaded_files_to_df(files: List, max_chars: int = 20000) -> pd.DataFr
 
     df = pd.DataFrame(rows)
     if df.empty:
-        return pd.DataFrame(columns=["candidate_id", "file", "resume_text", "text_len", "email", "phone"])
+        return pd.DataFrame(columns=["candidate_id", "file", "name", "resume_text", "text_len", "email", "phone"])
 
     source_columns = ["resume_text", "text", "full_text", "content", "parsed_text"]
 

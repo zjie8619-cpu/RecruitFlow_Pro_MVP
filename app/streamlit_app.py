@@ -611,7 +611,7 @@ with tab2:
         else:
             st.success(f"已解析 {len(resumes_df)} 份简历。")
             st.dataframe(
-                resumes_df[["candidate_id", "file", "email", "phone", "text_len"]],
+                resumes_df[["candidate_id", "name", "file", "email", "phone", "text_len"]],
                 use_container_width=True
             )
 
@@ -626,6 +626,7 @@ with tab2:
                     st.dataframe(
                         scored_df[[
                             "candidate_id",
+                            "name",
                             "file",
                             "email",
                             "phone",

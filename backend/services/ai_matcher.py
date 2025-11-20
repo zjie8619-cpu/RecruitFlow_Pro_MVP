@@ -874,6 +874,7 @@ def ai_match_resumes_df(jd_text: str, resumes_df: pd.DataFrame, job_title: str =
             {
                 "candidate_id": resumes_df.loc[idx, "candidate_id"] if "candidate_id" in resumes_df.columns else None,
                 "file": file_name,
+                "name": resumes_df.loc[idx, "name"] if "name" in resumes_df.columns else "",
                 "email": resumes_df.loc[idx, "email"] if "email" in resumes_df.columns else "",
                 "phone": resumes_df.loc[idx, "phone"] if "phone" in resumes_df.columns else "",
                 "resume_text": resume_text,

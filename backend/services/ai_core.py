@@ -31,8 +31,8 @@ def _join_evidence(evidence: Any) -> str:
 def generate_ai_summary(candidate_dict: Dict[str, Any]) -> str:
     """基于候选人信息生成亮点总结。"""
     name = (
-        _safe_text(candidate_dict.get("file"))
-        or _safe_text(candidate_dict.get("name"), "候选人")
+        _safe_text(candidate_dict.get("name"))
+        or _safe_text(candidate_dict.get("file"), "候选人")
     )
     score = (
         candidate_dict.get("总分")
@@ -194,7 +194,7 @@ def _generate_template_email(
         pass
     
     # 提取候选人信息
-    name = candidate_dict.get("file") or candidate_dict.get("name") or "候选人"
+    name = candidate_dict.get("name") or candidate_dict.get("file") or "候选人"
     # score = candidate_dict.get("总分") or candidate_dict.get("score_total") or candidate_dict.get("score", "未知")
     short_eval = candidate_dict.get("short_eval") or candidate_dict.get("简评", "")
     evidence = candidate_dict.get("证据") or candidate_dict.get("evidence", [])
