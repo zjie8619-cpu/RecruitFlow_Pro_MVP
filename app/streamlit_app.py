@@ -12,12 +12,25 @@ from backend.services.pipeline import RecruitPipeline
 from backend.services.reporting import export_round_report
 from backend.utils.versioning import VersionManager
 from backend.utils.field_mapping import translate_dataframe_columns, translate_field
-from backend.services.jd_ai import generate_jd_bundle
+# 强制重新加载模块，避免缓存问题
+import importlib
+import sys
+if 'backend.services.jd_ai' in sys.modules:
+    importlib.reload(sys.modules['backend.services.jd_ai'])
+from backend.services.jd_ai import generate_jd_bundle, construct_full_ability_list
 from backend.services.resume_parser import parse_uploaded_files_to_df
+# 🔄 确保 AI 匹配逻辑更新时立即生效
+if 'backend.services.ai_matcher' in sys.modules:
+    importlib.reload(sys.modules['backend.services.ai_matcher'])
 from backend.services.ai_matcher import ai_match_resumes_df
 from backend.services.ai_core import generate_ai_summary, generate_ai_email
 from backend.services.calendar_utils import create_ics_file
-from backend.services.excel_exporter import generate_competency_excel
+# from backend.services.excel_exporter import generate_competency_excel, export_ability_sheet_to_file  # 函数不存在，已注释
+
+# 强制重新加载 Excel 导出模块，确保模板样式调整后前端立即生效
+if 'backend.services.export_excel' in sys.modules:
+    importlib.reload(sys.modules['backend.services.export_excel'])
+from backend.services.export_excel import export_competency_excel
 from dotenv import load_dotenv
 
 # 尝试从多个位置加载.env文件
@@ -163,15 +176,18 @@ with tab1:
                 ai_must = ai_must.replace("tex", "LaTeX").replace("Tex", "LaTeX")
                 ai_nice = ai_nice.replace("tex", "LaTeX").replace("Tex", "LaTeX")
                 try:
+                    # 强制重新加载模块，确保使用最新代码
+                    if 'backend.services.jd_ai' in sys.modules:
+                        importlib.reload(sys.modules['backend.services.jd_ai'])
+                        from backend.services.jd_ai import generate_jd_bundle
                     with st.spinner("🤖 AI正在智能分析岗位需求，生成专业JD、能力维度、面试题目，请稍候（通常需要10-30秒）..."):
                         bundle = generate_jd_bundle(ai_job, ai_must, ai_nice, ai_excl)
                         # 基于长版 JD 再做一次“短版JD提取 + 任职要求抽取能力与面试题”
                         from backend.services.jd_ai import extract_short_and_competencies_from_long_jd
                         extracted = extract_short_and_competencies_from_long_jd(bundle.get("jd_long",""), ai_job)
                         if extracted:
-                            # 用抽取得到的短版 JD 覆盖
-                            if extracted.get("short_jd"):
-                                bundle["jd_short"] = extracted["short_jd"]
+                            # ✅ 不再用抽取得到的短版 JD 覆盖，以免破坏“小红书风格”短版 JD
+                            # 如需查看抽取版短 JD，可后续单独在前端展示 extracted["short_jd"]
                             # 用抽取得到的能力维度/面试题覆盖展示（转换为内部格式）
                             dims = []
                             for d in extracted.get("能力维度", []):
@@ -206,6 +222,9 @@ with tab1:
                                 })
                             if qs:
                                 bundle["interview"] = qs
+                            bundle["full_ability_list"] = construct_full_ability_list(
+                                bundle.get("dimensions"), bundle.get("interview")
+                            )
                     # ✅ 持久化：后续其它按钮/区域可复用
                     st.session_state["ai_bundle"] = bundle
                     st.success("✅ AI 生成完成")
@@ -235,194 +254,93 @@ with tab1:
             st.subheader("🪧 短版 JD（社媒/内推）")
             st.text_area("短版 JD", bundle["jd_short"], height=100)
         
-            # 1️⃣ 生成岗位能力维度表 df_dimensions（含分值计算逻辑）
-            st.subheader("🎯 岗位能力维度（AI 分析）")
-            question_map = {q.get("dimension"): q for q in bundle.get("interview", [])}
-            competency_rows = []
-            for dim in bundle["dimensions"]:
-                anchors = dim.get("anchors") or {}
-                question_entry = question_map.get(dim.get("name")) or {}
-                question_text = question_entry.get("question")
-                if isinstance(question_text, list):
-                    question_text = "\n".join(str(item).strip() for item in question_text if str(item).strip())
-                question_text = question_text or ""
-                points_data = question_entry.get("points") or []
-                if isinstance(points_data, str):
-                    points_text = "\n".join(p.strip() for p in re.split(r"[；;、\n]", points_data) if p.strip())
-                else:
-                    points_text = "\n".join(str(p).strip() for p in points_data if str(p).strip())
-                competency_rows.append({
-                    "能力维度": dim.get("name", ""),
-                    "说明": dim.get("desc", ""),
-                    "权重(%)": round(float(dim.get("weight", 0)) * 100, 1),
-                    "面试问题": question_text,
-                    "评分要点": points_text,
-                    "20分行为表现": anchors.get("20", ""),
-                    "60分行为表现": anchors.get("60", ""),
-                    "100分行为表现": anchors.get("100", ""),
+            st.markdown("### 岗位能力维度与面试题目（AI分析 + AI生成）")
+            full_ability = bundle.get("full_ability_list") or construct_full_ability_list(
+                bundle.get("dimensions"), bundle.get("interview")
+            )
+            bundle["full_ability_list"] = full_ability
+
+            display_rows = []
+            for item in full_ability:
+                display_rows.append({
+                    "能力维度": item.get("dimension", ""),
+                    "说明": item.get("description", ""),
+                    "权重(%)": round(float(item.get("weight", 0.0)) * 100, 1),
+                    "面试题目": item.get("question", ""),
+                    "评分要点": item.get("score_points", ""),
+                    "20分行为表现": item.get("score_20", ""),
+                    "60分行为表现": item.get("score_60", ""),
+                    "100分行为表现": item.get("score_100", ""),
+                    "分值": item.get("score_value", 0.0),
                 })
 
-            df_dimensions = pd.DataFrame(competency_rows)
-            st.dataframe(df_dimensions, use_container_width=True)
+            df_full = pd.DataFrame(display_rows)
+            st.dataframe(df_full, use_container_width=True)
 
-            # 导出 Excel
-            excel_bytes = generate_competency_excel(bundle["dimensions"], bundle.get("interview", []))
-            download_name = f"{(st.session_state.get('job_name') or '岗位').strip()}_能力维度评分表.xlsx"
-            st.download_button(
-                "📄 导出能力维度评分表（Excel）",
-                data=excel_bytes,
-                file_name=download_name,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-            )
-
-            with st.expander("🔎 评分锚点（20 / 60 / 100 分行为示例）"):
-                for d in bundle["dimensions"]:
-                    anchors = d.get("anchors") or {}
-                    st.markdown(f"**{d['name']}**")
-                    st.markdown(f"- **20 分**：{anchors.get('20', '（未提供）')}")
-                    st.markdown(f"- **60 分**：{anchors.get('60', '（未提供）')}")
-                    st.markdown(f"- **100 分**：{anchors.get('100', '（未提供）')}")
-                    st.markdown("---")
-        
-            # ------------------ 默认生成函数（修复ImportError用） ------------------
-            def generate_default_question(dimension_name: str):
-                """AI 无返回时的默认题目模板"""
-                default_questions = {
-                    "沟通表达/同理心": "请举例说明你在与同事或客户沟通中，如何理解并回应他人情绪与需求。",
-                    "执行力/主人翁精神": "请描述一次你面对工作挑战时主动承担责任并推动任务完成的经历。"
-                }
-                return default_questions.get(dimension_name, f"请结合{dimension_name}维度，描述一个相关的典型工作场景。")
-
-            def generate_default_rubric(dimension_name: str):
-                """AI 无返回时的默认评分要点"""
-                default_rubrics = {
-                    "沟通表达/同理心": ["表达清晰；倾听他人；共情回应；解决冲突能力强。"],
-                    "执行力/主人翁精神": ["责任心强；积极主动；执行高效；能带动团队完成目标。"]
-                }
-                return default_rubrics.get(dimension_name, ["回答逻辑清晰；有实际案例；体现核心能力。"])
-            # -------------------------------------------------------------------------
-        
-            # 3️⃣ 生成岗位能力维度与面试题表 df_final（来自 AI 分析 + AI 生成）
-            interview_list = bundle.get("interview", [])
-            
-            # 构建维度名称到面试题的映射（按维度名称匹配，更可靠）
-            interview_map = {}
-            for q in interview_list:
-                dim_name = q.get("dimension", "").strip()
-                if dim_name:
-                    interview_map[dim_name] = q
-            
-            # 构建对齐表格：将维度与面试题一一对应（按维度名称匹配）
-            final_rows = []
-            for idx, dim_row in df_dimensions.iterrows():
-                dim_name = dim_row["能力维度"]
-                dim_desc = dim_row["说明"]
-                dim_weight = dim_row["权重(%)"]
-                
-                # 按维度名称匹配对应的面试题
-                matched_interview = interview_map.get(dim_name)
-                
-                if matched_interview:
-                    points = matched_interview.get("points") or []
-                    points_str = "；".join(points) if isinstance(points, list) else (str(matched_interview.get("points", "")) if matched_interview.get("points") else "")
-                    question_text = str(matched_interview.get("question", "")).strip()
-                    
-                    # 🔧 修正逻辑：如果 AI 没返回内容，重新生成真实文本而非提示语
-                    if not question_text or question_text == "（待生成）":
-                        question_text = generate_default_question(dim_name)
-                    
-                    # 🔧 修正逻辑：如果评分要点为空，生成真实评分要点而非提示语
-                    if not points_str or points_str.strip() == "":
-                        default_points = generate_default_rubric(dim_name)
-                        points_str = "；".join(default_points) if isinstance(default_points, list) else str(default_points)
-                    
-                    final_rows.append({
-                        "能力维度": dim_name,
-                        "说明": dim_desc,
-                        "权重(%)": dim_weight,
-                        "面试题目": question_text,
-                        "评分要点": points_str,
-                        "分值": matched_interview.get("score", 0)
+            # 使用模板生成 Excel（新版本，完全基于模板）
+            job_name = (st.session_state.get('job_name') or '岗位').strip()
+            try:
+                # 转换数据格式为 DataFrame
+                dimensions_data = []
+                for ability in full_ability:
+                    dimensions_data.append({
+                        "能力维度": ability.get("dimension", ""),
+                        "说明": ability.get("description", ""),
+                        "面试题目": ability.get("question", ""),
+                        "评分要点": ability.get("score_points", ""),
+                        "20分行为表现": ability.get("score_20", ""),
+                        "60分行为表现": ability.get("score_60", ""),
+                        "100分行为表现": ability.get("score_100", ""),
+                        "权重": ability.get("weight", 0.0),
                     })
-                else:
-                    # 🔧 如果没有对应的面试题，生成真实默认内容（而非提示语）
-                    default_question = generate_default_question(dim_name)
-                    default_points_list = generate_default_rubric(dim_name)
-                    default_points_str = "；".join(default_points_list) if isinstance(default_points_list, list) else str(default_points_list)
-                    final_rows.append({
-                        "能力维度": dim_name,
-                        "说明": dim_desc,
-                        "权重(%)": dim_weight,
-                        "面试题目": default_question,
-                        "评分要点": default_points_str,
-                        "分值": 0
-                    })
-            
-            df_final = pd.DataFrame(final_rows)
-            
-            # ✅ 在显示前加这段：分值与权重对齐修正
-            if "权重(%)" in df_final.columns:
-                total_weight = df_final["权重(%)"].sum()
-                df_final["分值"] = df_final["权重(%)"].apply(lambda w: round(w * 100 / total_weight, 1))
-                total_score = round(df_final["分值"].sum(), 1)
-                if abs(total_score - 100) > 0.1:
-                    df_final["分值"] = df_final["分值"] * 100 / total_score
-                    df_final["分值"] = df_final["分值"].round(1)
-            
-            st.subheader("岗位能力维度与面试题目（AI分析 + AI生成）")
-            st.dataframe(df_final, use_container_width=True, hide_index=True)
-            
-            # 检查是否有缺失项（包含"（待生成）"或空内容）
-            has_missing = False
-            for _, row in df_final.iterrows():
-                if "（待生成）" in str(row.get("面试题目", "")) or not str(row.get("面试题目", "")).strip():
-                    has_missing = True
-                    break
-                if not str(row.get("评分要点", "")).strip():
-                    has_missing = True
-                    break
-            
-            if has_missing:
-                st.warning("⚠️ 检测到部分维度缺少面试题或评分要点，请点击下方按钮一键补全。")
-                if st.button("🔄 一键补全缺失项", type="primary", key="btn_fill_missing_interviews"):
-                    # 更新 interview_list 和 bundle
-                    updated_interview_list = []
-                    for _, row in df_final.iterrows():
-                        dim_name = row["能力维度"]
-                        question = row["面试题目"]
-                        points_str = row["评分要点"]
-                        
-                        # 🔧 如果还是"（待生成）"或空，生成真实默认内容（而非提示语）
-                        if "（待生成）" in question or not question.strip():
-                            question = generate_default_question(dim_name)
-                        if not points_str.strip():
-                            default_points_list = generate_default_rubric(dim_name)
-                            points = default_points_list if isinstance(default_points_list, list) else [str(default_points_list)]
-                        else:
-                            points = [p.strip() for p in points_str.split("；") if p.strip()]
-                        
-                        updated_interview_list.append({
-                            "dimension": dim_name,
-                            "question": question,
-                            "points": points,
-                            "score": row.get("分值", 0)
-                        })
-                    
-                    # 更新 bundle 和 session_state
-                    bundle["interview"] = updated_interview_list
-                    st.session_state["ai_bundle"] = bundle
-                    st.success("✅ 缺失项已补全！请刷新页面查看更新后的表格。")
-                    st.rerun()
-            else:
-                st.markdown("✅ 各能力维度与面试题目已对齐展示，便于结构化评估。")
-        
+                
+                # 创建 DataFrame（去掉控制台调试输出，避免 Windows 控制台编码导致 OSError）
+                data_df = pd.DataFrame(dimensions_data)
+                
+                # 固定输出路径
+                output_path = r"C:\RecruitFlow_Pro_MVP\docs\课程顾问_能力维度评分表(改)_输出.xlsx"
+                
+                def _coerce_excel_result(result, fallback_path):
+                    if isinstance(result, tuple):
+                        return result
+                    if isinstance(result, bytes):
+                        return result, fallback_path
+                    read_path = result if isinstance(result, str) else fallback_path
+                    with open(read_path, "rb") as f:
+                        return f.read(), read_path
+                
+                # 使用新的导出函数（完全基于模板）
+                try:
+                    export_result = export_competency_excel(
+                        data_df, output_path, job_title=job_name
+                    )
+                except TypeError:
+                    print("[streamlit] export_competency_excel fallback to legacy signature")
+                    export_result = export_competency_excel(data_df, output_path)
+
+                excel_bytes, saved_path = _coerce_excel_result(export_result, output_path)
+
+                if saved_path and saved_path != output_path:
+                    st.warning(f"原始输出文件被占用，已改为保存到：`{saved_path}`")
+                
+                download_name = f"{job_name}_能力维度评分表.xlsx"
+                st.download_button(
+                    "📄 导出能力维度评分表（Excel）",
+                    data=excel_bytes,
+                    file_name=download_name,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
+            except Exception as e:
+                st.error(f"导出失败：{str(e)}")
+                st.exception(e)
+ 
+            # 保留单一保存入口
             if st.button("💾 写入系统（保存 JD + 题库）", type="primary", key="btn_save_rubric_1"):
                 save_to_system_action()
         else:
-            if bundle is None:
-                st.info('尚未生成 Rubric（请先点击上方"生成 JD"）')
-
+            st.info('尚未生成 Rubric（请先点击上方"生成 JD"）')
+        
         # ✅ 隐藏评分维度规则（Rubric）部分，只保留功能逻辑
         # 这里保留 bundle_for_rubric 的生成和保存逻辑，但不渲染到页面
         bundle_for_rubric = st.session_state.get("ai_bundle")
@@ -440,7 +358,17 @@ with tab1:
     
     # ==== AI 连接诊断（放在页面底部）====
     with st.expander("🔧 AI 连接诊断（打不开就点我）"):
-        from backend.services.ai_client import get_client_and_cfg, AIConfig, chat_completion
+        try:
+            # 强制重新加载模块，避免缓存问题
+            import importlib
+            import sys
+            if 'backend.services.ai_client' in sys.modules:
+                importlib.reload(sys.modules['backend.services.ai_client'])
+            from backend.services.ai_client import get_client_and_cfg, AIConfig, chat_completion
+        except ImportError as e:
+            st.error(f"❌ 导入 AI 客户端失败：{e}")
+            st.info("💡 请检查 backend/services/ai_client.py 文件是否存在且可正常导入")
+            st.stop()
         
         cfg = AIConfig()
         key_present = bool(cfg.api_key)
@@ -462,12 +390,19 @@ with tab1:
                         temperature=0,
                         max_tokens=10
                     )
-                    result = res.choices[0].message.content.strip()
+                    result = res["choices"][0]["message"]["content"].strip()
                     st.success(f"✅ AI 连通性测试成功！返回：{result}")
             except Exception as e:
                 error_detail = str(e)
                 st.error(f"❌ 连通性失败：{error_detail}")
-                if "Key" in error_detail or "未配置" in error_detail:
+                if "ChatCompletion" in error_detail or "openai>=1.0.0" in error_detail:
+                    st.error("⚠️ OpenAI API 版本兼容性问题")
+                    st.info("💡 这通常是因为代码中使用了旧版本的 OpenAI API。请确保：\n"
+                           "1. 已安装 openai>=1.0.0：`pip install --upgrade openai`\n"
+                           "2. 代码使用 `client.chat.completions.create` 而不是 `openai.ChatCompletion.create`\n"
+                           "3. 重启 Streamlit 应用以清除缓存")
+                    st.code("pip install --upgrade openai", language="bash")
+                elif "Key" in error_detail or "未配置" in error_detail:
                     st.info("💡 检查 .env 的 Key 配置；确保文件在项目根目录；重启 Streamlit")
                 elif "401" in error_detail or "403" in error_detail:
                     st.info("💡 API Key 无效或已过期，请检查 .env 中的 Key 是否正确")
@@ -477,6 +412,53 @@ with tab1:
                     st.info("💡 网络连接问题，检查公司网络是否放行 api.siliconflow.cn；或尝试使用 OpenAI")
                 else:
                     st.info("💡 检查 .env 的 Key/模型/Base URL；或公司网络是否放行 api.siliconflow.cn")
+    
+    # 一键启动说明
+    with st.expander("🚀 一键启动程序（首次使用必看）", expanded=False):
+        st.markdown("""
+        ### 快速启动方法
+        
+        1. **最简单方式**：双击项目根目录的 `启动程序.bat` 文件
+        2. **PowerShell 方式**：右键 `启动程序.ps1` -> 使用 PowerShell 运行
+        3. **命令行方式**：运行 `启动程序.bat` 或 `.\\启动程序.ps1`
+        
+        ### 首次使用前准备
+        
+        - ✅ 确保已安装 Python 3.8+
+        - ✅ 已创建虚拟环境：`python -m venv .venv`
+        - ✅ 已安装依赖：`.venv\\Scripts\\pip install -r requirements.txt`
+        - ✅ 已配置 `.env` 文件（AI Key 等，可选）
+        
+        ### 详细使用说明
+        
+        请查看项目根目录的 `使用说明.md` 文件，包含：
+        - 📋 完整功能说明
+        - 🔧 常见问题解答
+        - 🎯 各功能模块使用指南
+        
+        ### 当前运行状态
+        
+        - 🌐 访问地址：http://localhost:8501
+        - 📁 项目目录：""" + str(Path.cwd()) + """
+        """)
+        
+        # 显示启动脚本路径
+        bat_path = Path.cwd() / "启动程序.bat"
+        ps1_path = Path.cwd() / "启动程序.ps1"
+        
+        if bat_path.exists():
+            st.success(f"✅ 启动脚本已找到：`{bat_path}`")
+        else:
+            st.warning(f"⚠️ 启动脚本不存在：`{bat_path}`")
+        
+        if ps1_path.exists():
+            st.success(f"✅ PowerShell 脚本已找到：`{ps1_path}`")
+        
+        # 提供快速命令
+        cmd_text = f"""# 快速启动命令（复制到命令行运行）
+cd "{Path.cwd()}"
+.venv\\Scripts\\python.exe -m streamlit run app/streamlit_app.py --server.port 8501"""
+        st.code(cmd_text, language="bash")
     
     st.markdown("---")
     if SHOW_OFFLINE_SECTION:
@@ -652,7 +634,7 @@ with tab2:
                             "经验相关性",
                             "成长潜力",
                             "稳定性",
-                            "简评",
+                            "short_eval",
                             "证据"
                         ]],
                         use_container_width=True
@@ -741,8 +723,18 @@ with tab4:
 
         interview_time = st.text_input("🕒 面试时间（例：2025-11-15 14:00, Asia/Shanghai）", "2025-11-15 14:00, Asia/Shanghai")
         organizer_email = st.text_input("📧 面试组织者邮箱", "hr@company.com")
+        
+        # 企业微信配置（可选）
+        with st.expander("📱 企业微信配置（可选）"):
+            organizer_name = st.text_input("组织者姓名", "HR", help="用于企业微信消息中的联系人显示", key="organizer_name")
+            organizer_wechat = st.text_input("组织者企业微信ID", "", help="可选，用于生成企业微信添加链接", key="organizer_wechat")
+            meeting_link = st.text_input("会议链接（可选）", "", help="如：腾讯会议链接、Zoom链接等", key="meeting_link")
 
         if st.button("🚀 一键生成邀约邮件 + ICS"):
+            # 获取企业微信配置（如果未设置，使用默认值）
+            organizer_name = st.session_state.get("organizer_name", "HR")
+            organizer_wechat = st.session_state.get("organizer_wechat", "")
+            meeting_link = st.session_state.get("meeting_link", "")
             st.info("AI 正在生成个性化邀约内容，请稍候...")
 
             invite_results = []
@@ -792,6 +784,8 @@ with tab4:
                         "body": email_body,
                         "highlights": candidate_highlight,
                         "score": candidate_score,
+                        "position": job_title,
+                        "interview_time": interview_time,
                     }
                 )
 
@@ -801,6 +795,121 @@ with tab4:
                 fp.write(json_payload)
 
             st.success("✅ AI 个性化邀约生成完成！")
+            
+            # 企业微信集成
+            st.markdown("### 📱 企业微信邀约")
+            try:
+                from backend.services.wechat_integration import create_wechat_invite_template
+                
+                wechat_results = []
+                for invite in invite_results:
+                    wechat_data = create_wechat_invite_template({
+                        "name": invite.get("name", ""),
+                        "email": invite.get("email", ""),
+                        "position": invite.get("position", job_title),
+                        "interview_time": invite.get("interview_time", interview_time),
+                        "highlights": invite.get("highlights", ""),
+                        "meeting_link": meeting_link,
+                        "organizer_name": organizer_name,
+                        "organizer_wechat": organizer_wechat,
+                    })
+                    wechat_results.append(wechat_data)
+                
+                # 显示企业微信消息（可复制）
+                for idx, (invite, wechat_data) in enumerate(zip(invite_results, wechat_results)):
+                    with st.expander(f"📱 {invite.get('name', f'候选人{idx+1}')} - 企业微信消息"):
+                        st.text_area(
+                            "企业微信消息内容（点击复制）",
+                            value=wechat_data.get("wechat_message", ""),
+                            height=200,
+                            key=f"wechat_msg_{idx}",
+                            help="复制此内容到企业微信发送给候选人"
+                        )
+                        if wechat_data.get("meeting_link"):
+                            st.write(f"🔗 会议链接：{wechat_data.get('meeting_link')}")
+                        if wechat_data.get("wechat_link"):
+                            st.write(f"📱 {wechat_data.get('wechat_link')}")
+            except Exception as e:
+                st.info(f"💡 企业微信功能：{str(e)}")
+            
+            # 邮件导入企业邮箱
+            st.markdown("### 📧 邮件导入企业邮箱")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                try:
+                    from backend.services.email_integration import generate_email_import_file, generate_outlook_import_csv
+                    
+                    if st.button("📥 生成邮件导入文件（.eml）"):
+                        with st.spinner("正在生成邮件导入文件..."):
+                            import_path = generate_email_import_file(invite_results)
+                            if import_path:
+                                st.success(f"✅ 邮件文件已生成：`{import_path}`")
+                                st.info("💡 使用方法：\n1. Outlook：文件 -> 打开 -> 其他文件 -> 选择 .eml 文件\n2. 企业邮箱：设置 -> 导入邮件 -> 选择 .eml 文件")
+                            else:
+                                st.warning("⚠️ 生成失败，请检查数据")
+                except Exception as e:
+                    st.warning(f"邮件导入功能：{str(e)}")
+            
+            with col2:
+                try:
+                    if st.button("📋 生成Outlook导入CSV"):
+                        with st.spinner("正在生成CSV文件..."):
+                            csv_path = generate_outlook_import_csv(invite_results)
+                            if csv_path:
+                                with open(csv_path, 'rb') as f:
+                                    st.download_button(
+                                        "⬇️ 下载Outlook导入CSV",
+                                        data=f.read(),
+                                        file_name=os.path.basename(csv_path),
+                                        mime="text/csv"
+                                    )
+                                st.success(f"✅ CSV文件已生成：`{csv_path}`")
+                except Exception as e:
+                    st.warning(f"CSV生成功能：{str(e)}")
+            
+            # SMTP邮件发送（可选）
+            with st.expander("📮 通过SMTP直接发送邮件（需要配置）"):
+                st.info("💡 需要在 .env 文件中配置以下参数：\n- SMTP_SERVER（如：smtp.exmail.qq.com）\n- SMTP_PORT（默认587）\n- SMTP_USER（邮箱地址）\n- SMTP_PASSWORD（邮箱密码或授权码）")
+                
+                smtp_server = st.text_input("SMTP服务器", os.getenv("SMTP_SERVER", ""), help="如：smtp.exmail.qq.com")
+                smtp_port = st.number_input("SMTP端口", value=int(os.getenv("SMTP_PORT", "587")), min_value=1, max_value=65535)
+                smtp_user = st.text_input("SMTP用户名（邮箱）", os.getenv("SMTP_USER", ""))
+                smtp_password = st.text_input("SMTP密码/授权码", type="password", value=os.getenv("SMTP_PASSWORD", ""))
+                
+                if st.button("📤 批量发送邮件"):
+                    if not smtp_server or not smtp_user or not smtp_password:
+                        st.error("❌ 请先配置SMTP参数")
+                    else:
+                        try:
+                            from backend.services.email_integration import send_email_via_smtp
+                            
+                            success_count = 0
+                            fail_count = 0
+                            
+                            for invite in invite_results:
+                                result = send_email_via_smtp(
+                                    to_email=invite.get("email", ""),
+                                    subject=f"面试邀约 - {job_title} - {invite.get('name', '')}",
+                                    body=invite.get("body", ""),
+                                    ics_path=invite.get("ics", ""),
+                                    smtp_server=smtp_server,
+                                    smtp_port=smtp_port,
+                                    smtp_user=smtp_user,
+                                    smtp_password=smtp_password,
+                                    from_email=smtp_user
+                                )
+                                
+                                if result.get("success"):
+                                    success_count += 1
+                                else:
+                                    fail_count += 1
+                                    st.warning(f"❌ {invite.get('name', '')} 发送失败：{result.get('message', '')}")
+                            
+                            st.success(f"✅ 邮件发送完成：成功 {success_count} 封，失败 {fail_count} 封")
+                        except Exception as e:
+                            st.error(f"❌ 发送失败：{str(e)}")
+            
             st.download_button(
                 "📥 下载邀约结果（JSON）",
                 data=json_payload,
@@ -808,9 +917,29 @@ with tab4:
                 mime="application/json",
             )
 
+            # 保存待面试清单（带错误处理）
             pending_path = "reports/pending_interviews.csv"
-            pd.DataFrame(invite_results).to_csv(pending_path, index=False, encoding="utf-8-sig")
-            st.write(f"📋 已自动更新待面试清单：`{pending_path}`")
+            try:
+                # 确保目录存在
+                import os
+                os.makedirs("reports", exist_ok=True)
+                
+                # 尝试写入文件
+                pd.DataFrame(invite_results).to_csv(pending_path, index=False, encoding="utf-8-sig")
+                st.write(f"📋 已自动更新待面试清单：`{pending_path}`")
+            except PermissionError:
+                # 如果文件被占用（如 Excel 打开），使用带时间戳的文件名
+                from datetime import datetime
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                pending_path_alt = f"reports/pending_interviews_{timestamp}.csv"
+                try:
+                    pd.DataFrame(invite_results).to_csv(pending_path_alt, index=False, encoding="utf-8-sig")
+                    st.warning(f"⚠️ 原文件被占用，已保存到：`{pending_path_alt}`")
+                    st.info("💡 提示：请关闭可能正在打开 `pending_interviews.csv` 的程序（如 Excel）")
+                except Exception as e:
+                    st.warning(f"⚠️ 保存待面试清单失败：{str(e)}")
+            except Exception as e:
+                st.warning(f"⚠️ 保存待面试清单失败：{str(e)}")
 
             st.json(invite_results, expanded=False)
 

@@ -14,9 +14,9 @@ from backend.services.text_rules import sanitize_for_job
         (
             "竞赛教练",
             "指导学生获数学竞赛一等奖；多次命题研究；教授LaTeX",
-            "有多年竞赛培训经验",
+            "有多年竞赛培训经�?,
             "指导学生获数学竞赛一等奖；多次命题研究；教授LaTeX",
-            "有多年竞赛培训经验",
+            "有多年竞赛培训经�?,
         ),
     ],
 )

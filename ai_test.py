@@ -1,7 +1,8 @@
+
 # -*- coding: utf-8 -*-
 import os
 import sys
-from openai import OpenAI
+import openai
 from backend.services.ai_client import chat_completion, AIConfig
 from dotenv import load_dotenv
 
@@ -27,7 +28,8 @@ print(f"   Base URL: {base}")
 print(f"   模型: {model}")
 print(f"\n[TEST] 正在测试AI连通性...")
 
-client = OpenAI(api_key=key, base_url=base)
+openai.api_key = key
+openai.api_base = base
 cfg = AIConfig(
     provider="siliconflow" if os.getenv("SILICONFLOW_API_KEY") else "openai",
     api_key=key,
@@ -35,6 +37,7 @@ cfg = AIConfig(
     model=model,
     temperature=0.0,
 )
+client = openai
 
 try:
     res = chat_completion(
@@ -44,7 +47,7 @@ try:
         temperature=0,
         max_tokens=10
     )
-    result = res.choices[0].message.content.strip()
+    result = res["choices"][0]["message"]["content"].strip()
     print(f"[SUCCESS] AI 连通性测试成功！")
     print(f"   AI 返回：{result}")
 except Exception as e:
@@ -58,4 +61,5 @@ except Exception as e:
         print("[TIP] 网络连接问题，检查网络是否放行 api.siliconflow.cn")
     else:
         print("[TIP] 请检查 .env 配置和网络连接")
+
 

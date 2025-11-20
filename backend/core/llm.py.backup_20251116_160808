@@ -1,0 +1,393 @@
+"""
+AI接入模块：支持OpenAI、Claude和硅基流动(SiliconFlow) API调用
+"""
+import os
+import json
+import re
+from pathlib import Path
+from typing import Dict, Any, Optional
+
+def _load_api_keys():
+    """从配置文件加载API密钥"""
+    keys_file = Path("backend/configs/api_keys.json")
+    if keys_file.exists():
+        try:
+            return json.loads(keys_file.read_text(encoding="utf-8"))
+        except:
+            return {}
+    return {}
+
+def call_openai(prompt: str, model: str = "gpt-4o-mini", temperature: float = 0.7, base_url: Optional[str] = None) -> str:
+    """调用OpenAI API（兼容OpenAI格式，包括硅基流动）"""
+    try:
+        from openai import OpenAI
+        # 优先从配置文件读取，其次从环境变量
+        api_keys = _load_api_keys()
+        api_key = api_keys.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("未设置 OPENAI_API_KEY 环境变量或配置文件")
+        
+        client = OpenAI(
+            api_key=api_key,
+            base_url=base_url or "https://api.openai.com/v1"
+        )
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temperature
+        )
+        return response.choices[0].message.content.strip()
+    except ImportError:
+        raise ImportError("请安装 openai 包: pip install openai")
+    except Exception as e:
+        raise Exception(f"OpenAI API调用失败: {str(e)}")
+
+def call_siliconflow(prompt: str, model: str = "deepseek-chat", temperature: float = 0.7) -> str:
+    """调用硅基流动(SiliconFlow) API"""
+    try:
+        from openai import OpenAI
+        # 优先从环境变量读取，其次从配置文件读取
+        api_key = os.getenv("SILICONFLOW_API_KEY")
+        base_url = os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1")
+        
+        if not api_key:
+            api_keys = _load_api_keys()
+            api_key = api_keys.get("siliconflow_api_key")
+            base_url = api_keys.get("siliconflow_base_url", base_url)
+        
+        if not api_key:
+            raise ValueError("未在配置文件中找到 siliconflow_api_key，请检查 backend/configs/api_keys.json 或设置 SILICONFLOW_API_KEY 环境变量")
+        
+        client = OpenAI(
+            api_key=api_key,
+            base_url=base_url
+        )
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temperature
+        )
+        return response.choices[0].message.content.strip()
+    except ImportError:
+        raise ImportError("请安装 openai 包: pip install openai")
+    except Exception as e:
+        raise Exception(f"硅基流动 API调用失败: {str(e)}")
+
+def call_claude(prompt: str, model: str = "claude-3-5-sonnet-20241022", temperature: float = 0.7) -> str:
+    """调用Claude API"""
+    try:
+        from anthropic import Anthropic
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise ValueError("未设置 ANTHROPIC_API_KEY 环境变量")
+        
+        client = Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model=model,
+            max_tokens=4096,
+            temperature=temperature,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.content[0].text.strip()
+    except ImportError:
+        raise ImportError("请安装 anthropic 包: pip install anthropic")
+    except Exception as e:
+        raise Exception(f"Claude API调用失败: {str(e)}")
+
+def generate_jd_with_ai(job: str, must_have: str = "", nice_to_have: str = "", exclude_keywords: str = "", provider: str = "openai", model: Optional[str] = None):
+    """
+    使用AI智能生成JD和评分规则
+    
+    参数:
+        job: 岗位名称
+        must_have: 必备经验/技能
+        nice_to_have: 加分项
+        exclude_keywords: 排除项
+        provider: AI提供商
+        model: 模型名称
+    
+    返回: (jd_long, jd_short, rubric_dict, interview_questions)
+    """
+    if provider == "openai":
+        model = model or "gpt-4o-mini"
+        call_func = call_openai
+    elif provider == "claude":
+        model = model or "claude-3-5-sonnet-20241022"
+        call_func = call_claude
+    elif provider == "siliconflow":
+        model = model or "deepseek-chat"
+        call_func = call_siliconflow
+    else:
+        raise ValueError(f"不支持的AI提供商: {provider}，请使用 'openai'、'claude' 或 'siliconflow'")
+    
+    # 构建输入信息
+    input_info = f"岗位名称：{job}"
+    if must_have:
+        input_info += f"\n必备经验/技能：{must_have}"
+    if nice_to_have:
+        input_info += f"\n加分项：{nice_to_have}"
+    if exclude_keywords:
+        input_info += f"\n排除项：{exclude_keywords}"
+    
+    prompt = f"""你是一位资深的HR专家，拥有10年以上招聘经验，擅长为不同岗位定制精准的招聘方案。
+
+【重要】请仔细分析以下岗位信息，为"{job}"这个特定岗位生成完全定制化的招聘方案。不同岗位必须有不同的职责、要求和能力维度！
+
+输入信息：
+{input_info}
+
+【核心要求】
+1. **岗位职责必须完全贴合"{job}"这个岗位**，不能使用通用模板。例如：
+   - 如果是"数学竞赛教练"，职责应该围绕数学竞赛教学、题目设计、学生培养等
+   - 如果是"数据分析师"，职责应该围绕数据分析、报表制作、业务洞察等
+   - 如果是"课程顾问"，职责应该围绕销售转化、客户沟通、课程推荐等
+
+2. **任职要求必须结合输入的必备经验/技能、加分项、排除项**，生成针对性的要求
+
+3. **能力维度必须根据岗位特点定制**，不同岗位的核心能力不同：
+   - 技术岗位：专业技能权重应该更高
+   - 销售岗位：沟通能力和结果导向权重应该更高
+   - 管理岗位：领导力和战略思维权重应该更高
+
+4. **面试题目必须针对岗位核心能力设计**，能够有效鉴别候选人是否适合该岗位
+
+请严格按照以下格式输出（使用===分隔，不要遗漏任何部分）：
+
+===长版JD===
+【{job}｜岗位职责】
+1）[根据岗位特点，写第一条职责，必须贴合"{job}"]
+2）[根据岗位特点，写第二条职责]
+3）[根据岗位特点，写第三条职责]
+4）[根据岗位特点，写第四条职责]
+
+【任职要求】
+必备：[结合输入的必备经验/技能，写具体要求]
+加分：[结合输入的加分项，写加分要求]
+排除：[结合输入的排除项，写排除条件]
+
+===短版JD===
+[1-2句简洁亮点，突出"{job}"的核心价值]
+
+===能力维度===
+{{
+  "dimensions": [
+    {{"name": "[根据{job}岗位特点定制维度1]", "weight": 0.35, "description": "[说明为什么这个维度对{job}重要]"}},
+    {{"name": "[根据{job}岗位特点定制维度2]", "weight": 0.25, "description": "[说明]"}},
+    {{"name": "[根据{job}岗位特点定制维度3]", "weight": 0.20, "description": "[说明]"}},
+    {{"name": "[根据{job}岗位特点定制维度4]", "weight": 0.15, "description": "[说明]"}},
+    {{"name": "[根据{job}岗位特点定制维度5]", "weight": 0.05, "description": "[说明]"}}
+  ]
+}}
+
+===面试题目===
+{{
+  "questions": [
+    {{
+      "dimension": "[对应能力维度1]",
+      "question": "[针对{job}岗位设计的面试题，要具体、能鉴别能力]",
+      "evaluation_criteria": "优秀：[具体标准]；良好：[具体标准]；一般：[具体标准]；不合格：[具体标准]",
+      "weight": 0.25
+    }},
+    {{
+      "dimension": "[对应能力维度2]",
+      "question": "[针对{job}岗位设计的面试题]",
+      "evaluation_criteria": "优秀：[具体标准]；良好：[具体标准]；一般：[具体标准]；不合格：[具体标准]",
+      "weight": 0.25
+    }},
+    {{
+      "dimension": "[对应能力维度3]",
+      "question": "[针对{job}岗位设计的面试题]",
+      "evaluation_criteria": "优秀：[具体标准]；良好：[具体标准]；一般：[具体标准]；不合格：[具体标准]",
+      "weight": 0.25
+    }},
+    {{
+      "dimension": "[对应能力维度4]",
+      "question": "[针对{job}岗位设计的面试题]",
+      "evaluation_criteria": "优秀：[具体标准]；良好：[具体标准]；一般：[具体标准]；不合格：[具体标准]",
+      "weight": 0.25
+    }}
+  ]
+}}
+
+【严格检查】
+- 能力维度的权重总和必须等于1.0
+- 面试题目的权重总和必须等于1.0
+- 所有内容必须针对"{job}"岗位定制，不能使用通用模板
+- 面试题目必须能有效鉴别候选人能力
+- 评分标准必须具体、可操作
+- 所有输出必须是中文
+- 必须包含所有4个部分：长版JD、短版JD、能力维度、面试题目
+"""
+    
+    try:
+        response = call_func(prompt, model=model)
+        
+        # 解析响应
+        jd_long = ""
+        jd_short = ""
+        rubric_dict = {"job": job, "dimensions": []}
+        interview_questions = {"questions": []}
+        
+        # 尝试按分隔符解析
+        if "===" in response:
+            parts = response.split("===")
+            for i, part in enumerate(parts):
+                part = part.strip()
+                if i == 0:
+                    continue  # 跳过第一个空部分
+                
+                if "长版JD" in part or "岗位职责" in part:
+                    # 提取长版JD内容（到下一个分隔符之前）
+                    content = part
+                    if "长版JD" in content:
+                        content = content.split("长版JD", 1)[-1]
+                    jd_long = content.strip()
+                    if i + 1 < len(parts):
+                        # 继续读取直到下一个分隔符
+                        for j in range(i + 1, len(parts)):
+                            if "===" in parts[j] or any(kw in parts[j] for kw in ["短版", "评分配置", "评分维度"]):
+                                break
+                            jd_long += "\n" + parts[j].strip()
+                
+                elif "短版亮点" in part or "亮点" in part:
+                    content = part
+                    if "短版亮点" in content:
+                        content = content.split("短版亮点", 1)[-1]
+                    elif "亮点" in content:
+                        content = content.split("亮点", 1)[-1]
+                    jd_short = content.strip()
+                
+                elif "评分配置" in part:
+                    # 尝试提取JSON
+                    content = part.split("评分配置", 1)[-1].strip()
+                    # 查找JSON对象
+                    start = content.find("{")
+                    end = content.rfind("}") + 1
+                    if start >= 0 and end > start:
+                        try:
+                            config = json.loads(content[start:end])
+                            # 保存配置到rubric_dict（用于后续使用）
+                            rubric_dict["config"] = config
+                        except:
+                            pass
+                
+                elif "能力维度" in part or "评分维度" in part:
+                    content = part.split("能力维度", 1)[-1] if "能力维度" in part else part.split("评分维度", 1)[-1]
+                    content = content.strip()
+                    start = content.find("{")
+                    end = content.rfind("}") + 1
+                    if start >= 0 and end > start:
+                        try:
+                            rubric = json.loads(content[start:end])
+                            if "dimensions" in rubric:
+                                rubric_dict["dimensions"] = rubric["dimensions"]
+                        except:
+                            pass
+                
+                elif "面试题目" in part or "面试题" in part:
+                    content = part.split("面试题目", 1)[-1] if "面试题目" in part else part.split("面试题", 1)[-1]
+                    content = content.strip()
+                    # 尝试提取JSON
+                    start = content.find("{")
+                    end = content.rfind("}") + 1
+                    if start >= 0 and end > start:
+                        try:
+                            questions = json.loads(content[start:end])
+                            if "questions" in questions and questions["questions"]:
+                                interview_questions["questions"] = questions["questions"]
+                        except Exception as e:
+                            # 如果解析失败，尝试从整个响应中查找面试题目JSON
+                            pass
+        
+        # 如果面试题目没有解析到，尝试从整个响应中查找
+        if not interview_questions.get("questions"):
+            # 查找所有可能的JSON对象
+            json_pattern = r'\{\s*"questions"\s*:\s*\[.*?\]\s*\}'
+            matches = re.findall(json_pattern, response, re.DOTALL)
+            for match in matches:
+                try:
+                    questions = json.loads(match)
+                    if "questions" in questions and questions["questions"]:
+                        interview_questions["questions"] = questions["questions"]
+                        break
+                except:
+                    continue
+            
+            # 如果还是没找到，尝试查找包含"question"的JSON
+            if not interview_questions.get("questions"):
+                # 查找包含questions的JSON块
+                start_idx = response.find('"questions"')
+                if start_idx > 0:
+                    # 向前找到最近的{
+                    json_start = response.rfind("{", 0, start_idx)
+                    # 向后找到匹配的}
+                    brace_count = 0
+                    json_end = -1
+                    for i in range(json_start, len(response)):
+                        if response[i] == '{':
+                            brace_count += 1
+                        elif response[i] == '}':
+                            brace_count -= 1
+                            if brace_count == 0:
+                                json_end = i + 1
+                                break
+                    if json_end > json_start:
+                        try:
+                            questions = json.loads(response[json_start:json_end])
+                            if "questions" in questions and questions["questions"]:
+                                interview_questions["questions"] = questions["questions"]
+                        except:
+                            pass
+        
+        # 如果没有解析到，尝试智能提取
+        if not jd_long:
+            # 查找包含岗位职责的内容
+            if "岗位职责" in response or "【" in response:
+                lines = response.split("\n")
+                jd_lines = []
+                in_jd = False
+                for line in lines:
+                    if "岗位职责" in line or "【" in line:
+                        in_jd = True
+                    if in_jd:
+                        jd_lines.append(line)
+                        if "===" in line and len(jd_lines) > 3:
+                            break
+                jd_long = "\n".join(jd_lines) if jd_lines else response[:500]
+            else:
+                jd_long = response[:1000]  # 取前1000字符
+        
+        if not jd_short:
+            # 尝试从响应中提取简短描述
+            if "亮点" in response:
+                idx = response.find("亮点")
+                jd_short = response[idx:idx+200].replace("亮点", "").strip()[:100]
+            else:
+                jd_short = f"{job}｜AI智能生成，专业匹配"
+        
+        # 确保rubric_dict有默认值
+        if not rubric_dict.get("dimensions"):
+            rubric_dict["dimensions"] = [
+                {"name": "专业技能/方法论", "weight": 0.35, "description": "专业能力和方法论掌握程度"},
+                {"name": "沟通表达/同理心", "weight": 0.2, "description": "沟通能力和同理心"},
+                {"name": "执行力/主人翁", "weight": 0.2, "description": "执行力和主人翁意识"},
+                {"name": "数据意识/结果导向", "weight": 0.15, "description": "数据意识和结果导向"},
+                {"name": "学习成长/潜力", "weight": 0.1, "description": "学习能力和成长潜力"}
+            ]
+        
+        # 确保interview_questions有默认值
+        if not interview_questions.get("questions"):
+            interview_questions["questions"] = [
+                {
+                    "dimension": "专业技能",
+                    "question": "请描述一个你解决过的专业问题，说明你的解决思路和方法",
+                    "evaluation_criteria": "优秀：思路清晰，方法得当，有创新；良好：能解决问题但方法常规；一般：思路模糊；不合格：无法回答",
+                    "weight": 0.25
+                }
+            ]
+        
+        return jd_long, jd_short, rubric_dict, interview_questions
+        
+    except Exception as e:
+        raise Exception(f"AI生成JD失败: {str(e)}")
+

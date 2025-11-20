@@ -26,36 +26,39 @@ for cand in (ROOT / ".env", ROOT / "app" / ".env", Path.cwd() / ".env"):
 
 # 短版 JD Prompt 模板（社媒吸睛版）
 SHORT_JD_PROMPT_TEMPLATE = """
-你是一名懂社媒传播的资深招聘文案，擅长用 emoji + 口语化短句把岗位卖点讲清楚。
-请根据输入信息，生成类似小红书风格的短版 JD，要求既有剧情感，也有明确待遇/亮点。
+你现在是一名专业招聘文案编辑，擅长撰写适合社交媒体（小红书、朋友圈、BOSS 内推）的短版岗位介绍。
+请根据岗位信息撰写一段【吸引候选人、强卖点、情绪化、更具故事感】的短版 JD，用于社媒传播。
 
-【写作原则】
-- 语气友好、有画面感，像在和目标候选人聊天
-- 每一行开头需要带 emoji（示例：📣、💼、💰、🧾、📍、✨ 等），突出不同信息
-- 必须体现岗位使命/日常、薪资福利、必备/加分项、工作地点/模式、号召性结语
-- 允许使用「bonus」「想和我们一起…」等俏皮表达，但要保持专业可信
-- 总行数 6~7 行，每行不超过 30 个汉字，禁止使用「1）」「-」等列表符号
+必须满足以下要求：
 
-【固定行结构（可替换内容，但保持顺序和功能）】
-1）📣 {location}招·{job_title}   —— 如果没有明确城市，就写“全国招”
-2）一句吸睛的岗位口号，串联岗位使命或核心价值
-3）💼 概括日常工作/职责亮点（结合下方 responsibilities）
-4）💰 写清薪资区间 + 2-3 个福利亮点
-5）🧾 bonus/技能亮点：结合任职要求/加分项，突出买点（如 LaTeX、竞赛经验等）
-6）📍 {work_mode} | {location}
-7）✨ 结尾号召（如“想一起做最硬核的教育事？私信我！”）
+【风格要求】
+- 开头要用一句"吸引眼球"的岗位 Slogan（轻松、口语、有画面感）
+- 内容要突出"为什么这个岗位值得加入"（卖点明确）
+- 语气偏年轻化、友好、真诚
+- 文案允许使用 emoji（但不强制）
+- 不要使用列表格式（保持自然段表达）
 
-【输入信息】
+【结构要求】
+内容结构分三段：
+1）一句吸睛的岗位 Slogan  
+2）岗位日常介绍（3–4 句）  
+3）为什么值得加入（亮点、成长、氛围等，2–3 句）
+
+【禁止事项】
+- 不要出现「岗位职责」「任职要求」等正式标题
+- 不要使用数字编号（如 1）、（2）
+- 不要生成过长的段落（每段不超过 3 行）
+- 不要使用机械式招聘语言（如：负责……、完成……）
+
+请根据以下岗位信息生成短版 JD：
+
 岗位名称：{job_title}
 岗位使命：{mission}
 核心职责：{responsibilities}
 任职要求：{requirements}
 岗位亮点：{highlights}
-工作方式：{work_mode}
-工作地点：{location}
-薪资范围：{salary}
 
-请严格按上述结构输出，不需要额外解释或标题。
+请输出最终短版 JD 文案，不需要任何解释。
 """
 
 
@@ -1039,9 +1042,6 @@ def generate_jd_bundle(job_title: str, must: str = "", nice: str = "", exclude: 
         responsibilities="\n".join([f"- {item}" for item in jd.get("responsibilities", [])]),
         requirements=req_text,
         highlights="\n".join([f"- {item}" for item in jd.get("highlights", [])]),
-        work_mode=jd.get("work_mode", "全职"),
-        location=jd.get("location", "城市/远程"),
-        salary=jd.get("salary", "面议"),
     )
     
     jd_short = call_ai(
