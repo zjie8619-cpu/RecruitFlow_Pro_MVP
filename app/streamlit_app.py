@@ -58,6 +58,134 @@ SHOW_DETAIL_SECTIONS = True   # 是否显示详细部分（长版JD / 岗位能�
 st.set_page_config(page_title="RecruitFlow | 一键招聘流水线", layout="wide")
 st.title("RecruitFlow — 一键招聘流水线（教育机构版）")
 
+def sanitize_single_line(text, default="未提供相关信息", limit=None):
+    if text is None:
+        return default
+    cleaned = str(text).replace("\r", " ").replace("\n", "；")
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = (
+        cleaned.replace(",", "，")
+        .replace(";", "；")
+        .replace("|", "｜")
+        .strip(" ；")
+    )
+    if not cleaned:
+        cleaned = default
+    if limit and len(cleaned) > limit:
+        cleaned = cleaned[:limit].rstrip("； ，") + "..."
+    return cleaned
+
+
+def _clean_single_line(text, default="未提供", limit=None):
+    return sanitize_single_line(text, default, limit)
+
+
+def _format_highlights_for_export(row_dict):
+    tags = []
+    raw = row_dict.get("highlights")
+    if isinstance(raw, str):
+        tags = [seg.strip() for seg in re.split(r"[｜|，,、；\s]+", raw) if seg.strip()]
+    elif isinstance(raw, list):
+        tags = [str(seg).strip() for seg in raw if str(seg).strip()]
+
+    if len(tags) < 2:
+        strengths_text = row_dict.get("short_eval", "")
+        if strengths_text:
+            candidates = [seg.strip(" ；;") for seg in re.split(r"[｜|，,、；\s]+", strengths_text) if seg.strip()]
+            for item in candidates:
+                if len(item) <= 8:
+                    tags.append(item)
+                if len(tags) >= 3:
+                    break
+
+    tags = [tag for tag in tags if tag][:3]
+    if len(tags) == 1:
+        tags.append("综合能力")
+    return "｜".join(tags) if tags else "未提供"
+
+
+def _safe_load_json(value):
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except Exception:
+            return {}
+    return {}
+
+
+def _format_resume_summary(row_dict):
+    summary = row_dict.get("resume_mini") or row_dict.get("short_eval") or "未提供相关信息"
+    return _clean_single_line(summary, default="未提供相关信息", limit=130)
+
+
+def _format_evidence_field(row_dict):
+    reasoning = _safe_load_json(row_dict.get("reasoning_chain"))
+    short_eval_struct = _safe_load_json(row_dict.get("short_eval_struct"))
+
+    def _format_strengths():
+        chain = reasoning.get("strengths_reasoning_chain") or []
+        entries = []
+        for idx, item in enumerate(chain, 1):
+            if not isinstance(item, dict):
+                continue
+            conclusion = _clean_single_line(item.get("conclusion"), "未命名优势", 18)
+            actions = _clean_single_line(item.get("detected_actions"), "未提供", 24)
+            evidence = _clean_single_line(item.get("resume_evidence"), "未提供", 48)
+            reasoning_txt = _clean_single_line(item.get("ai_reasoning"), "未提供", 36)
+            entries.append(f"{idx}. {conclusion}｜动作:{actions}｜证据:{evidence}｜推断:{reasoning_txt}")
+        return "；".join(entries) if entries else "暂无可验证优势"
+
+    def _format_weaknesses():
+        chain = reasoning.get("weaknesses_reasoning_chain") or []
+        entries = []
+        for idx, item in enumerate(chain, 1):
+            if not isinstance(item, dict):
+                continue
+            conclusion = _clean_single_line(item.get("conclusion"), "未命名劣势", 18)
+            gap = _clean_single_line(item.get("resume_gap"), "未提供", 32)
+            compare = _clean_single_line(item.get("compare_to_jd"), "未提供", 40)
+            risk = _clean_single_line(item.get("ai_reasoning"), "未提供", 36)
+            entries.append(f"{idx}. {conclusion}｜缺口:{gap}｜JD:{compare}｜风险:{risk}")
+        return "；".join(entries) if entries else "暂无可验证劣势"
+
+    match_level = _clean_single_line(short_eval_struct.get("match_level"), "无法评估", 4)
+    match_reason = _clean_single_line(short_eval_struct.get("match_reason"), "未提供匹配原因", 60)
+    match_text = f"{match_level}：{match_reason}"
+
+    evidence_text = f"【优势】{_format_strengths()}【劣势】{_format_weaknesses()}【匹配度】{match_text}"
+    return _clean_single_line(evidence_text, default="未提供")
+
+
+def _build_export_dataframe(result_df, job_title):
+    rows = []
+    position_name = _clean_single_line(job_title, default="未提供")
+    for _, row in result_df.iterrows():
+        row_dict = row.to_dict()
+        candidate_id = row_dict.get("candidate_id")
+
+        try:
+            candidate_id = int(candidate_id)
+        except Exception:
+            candidate_id = 0
+
+        export_row = {
+            "候选人ID": candidate_id,
+            "姓名": _clean_single_line(row_dict.get("name"), "未提供"),
+            "文件名": _clean_single_line(row_dict.get("file"), "未提供"),
+            "岗位": position_name,
+            "邮箱": _clean_single_line(row_dict.get("email"), "未提供"),
+            "手机号": _clean_single_line(row_dict.get("phone"), "未提供"),
+            "总分": int(round(float(row_dict.get("总分", 0)))),
+            "亮点": _format_highlights_for_export(row_dict),
+            "简历摘要": _format_resume_summary(row_dict),
+            "证据": _format_evidence_field(row_dict),
+        }
+        rows.append(export_row)
+    return pd.DataFrame(rows)
+
+
 with st.sidebar:
     st.header("设置")
     cfg_file = Path("backend/configs/model_config.json")
@@ -687,25 +815,8 @@ with tab2:
                             use_container_width=True,
                             hide_index=True,
                         )
-                    export_columns = [
-                        "candidate_id",
-                        "name",
-                        "file",
-                        "email",
-                        "phone",
-                        "总分",
-                        "技能匹配度",
-                        "经验相关性",
-                        "成长潜力",
-                        "稳定性",
-                        "score_explain",
-                        "short_eval",
-                        "highlights",
-                        "resume_mini",
-                        "证据",
-                    ]
-                    export_cols_existing = [col for col in export_columns if col in result_df.columns]
-                    export_df = result_df[export_cols_existing].copy() if export_cols_existing else result_df.copy()
+                    export_job_title = st.session_state.get("job_name") or job_title or "未提供"
+                    export_df = _build_export_dataframe(result_df, export_job_title)
 
                     st.markdown("### 候选人洞察详情")
                     for _, row in result_df.iterrows():
