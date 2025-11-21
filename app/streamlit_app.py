@@ -610,8 +610,20 @@ with tab2:
             st.warning("没有解析到有效简历，请检查文件格式。")
         else:
             st.success(f"已解析 {len(resumes_df)} 份简历。")
+            base_columns = ["candidate_id", "name", "file", "email", "phone", "text_len"]
+            for col in base_columns:
+                if col not in resumes_df.columns:
+                    if col == "candidate_id":
+                        resumes_df[col] = range(1, len(resumes_df) + 1)
+                    elif col == "text_len":
+                        resumes_df[col] = resumes_df.get("resume_text", "").apply(lambda x: len(str(x)) if x else 0)
+                    else:
+                        resumes_df[col] = ""
+            # 使用字段映射翻译列名
+            display_resumes_df = resumes_df[base_columns].copy()
+            display_resumes_df = translate_dataframe_columns(display_resumes_df)
             st.dataframe(
-                resumes_df[["candidate_id", "name", "file", "email", "phone", "text_len"]],
+                display_resumes_df,
                 use_container_width=True
             )
 
@@ -623,24 +635,145 @@ with tab2:
                     job_title = st.session_state.get("job_name", "")
                     with st.spinner("AI 正在智能分析匹配度，请稍候…"):
                         scored_df = ai_match_resumes_df(jd_text, resumes_df, job_title)
-                    st.dataframe(
-                        scored_df[[
-                            "candidate_id",
-                            "name",
-                            "file",
-                            "email",
-                            "phone",
-                            "总分",
-                            "技能匹配度",
-                            "经验相关性",
-                            "成长潜力",
-                            "稳定性",
-                            "short_eval",
-                            "证据"
-                        ]],
-                        use_container_width=True
-                    )
+                    score_columns = [
+                        "candidate_id",
+                        "name",
+                        "file",
+                        "email",
+                        "phone",
+                        "总分",
+                        "技能匹配度",
+                        "经验相关性",
+                        "成长潜力",
+                        "稳定性",
+                        "score_explain",
+                        "short_eval",
+                        "highlights",
+                        "resume_mini",
+                        "证据",
+                    ]
+                    for col in score_columns:
+                        if col not in scored_df.columns:
+                            if col == "candidate_id":
+                                scored_df[col] = range(1, len(scored_df) + 1)
+                            else:
+                                scored_df[col] = ""
+                    
                     result_df = scored_df
+                    display_columns = [
+                        "candidate_id",
+                        "name",
+                        "file",
+                        "总分",
+                        "技能匹配度",
+                        "经验相关性",
+                        "成长潜力",
+                        "稳定性",
+                        "short_eval",
+                        "highlights",
+                        "resume_mini",
+                        "证据",
+                    ]
+                    existing_display = [col for col in display_columns if col in result_df.columns]
+                    if existing_display:
+                        display_df = result_df[existing_display].copy()
+                        if "resume_mini" in display_df.columns:
+                            display_df["resume_mini"] = display_df["resume_mini"].apply(
+                                lambda x: (x[:80] + "…") if isinstance(x, str) and len(x) > 80 else x
+                            )
+                        display_df = translate_dataframe_columns(display_df)
+                        st.dataframe(
+                            display_df,
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                    export_columns = [
+                        "candidate_id",
+                        "name",
+                        "file",
+                        "email",
+                        "phone",
+                        "总分",
+                        "技能匹配度",
+                        "经验相关性",
+                        "成长潜力",
+                        "稳定性",
+                        "score_explain",
+                        "short_eval",
+                        "highlights",
+                        "resume_mini",
+                        "证据",
+                    ]
+                    export_cols_existing = [col for col in export_columns if col in result_df.columns]
+                    export_df = result_df[export_cols_existing].copy() if export_cols_existing else result_df.copy()
+
+                    st.markdown("### 候选人洞察详情")
+                    for _, row in result_df.iterrows():
+                        score_label = row.get("总分")
+                        title = f"{row.get('name','匿名候选人')}｜总分 {score_label if score_label is not None else '—'}"
+                        with st.expander(title):
+                            raw_highlights = row.get("highlights", "")
+                            if isinstance(raw_highlights, str):
+                                highlights_raw = [tag.strip() for tag in re.split(r"[｜|，,、\s]+", raw_highlights) if tag.strip()]
+                            elif isinstance(raw_highlights, list):
+                                highlights_raw = raw_highlights
+                            else:
+                                highlights_raw = []
+                            if highlights_raw:
+                                st.markdown(
+                                    "**亮点标签**：" + " ".join(f"`{tag}`" for tag in highlights_raw if tag)
+                                )
+                            else:
+                                st.markdown("**亮点标签**：暂无")
+
+                            resume_mini = row.get("resume_mini", "")
+                            st.markdown("**短版简历**")
+                            st.write(resume_mini if resume_mini else "暂无短版简历")
+
+                            st.markdown("**AI 推理链**")
+                            reasoning_raw = row.get("reasoning_chain") or {}
+                            try:
+                                reasoning_obj = (
+                                    json.loads(reasoning_raw)
+                                    if isinstance(reasoning_raw, str)
+                                    else reasoning_raw
+                                )
+                            except Exception:
+                                reasoning_obj = {}
+                            def render_chain(title: str, chain: list, fields: list):
+                                st.markdown(f"##### {title}")
+                                if not chain:
+                                    st.caption("暂无相关记录")
+                                    return
+                                for idx, item in enumerate(chain, 1):
+                                    if not isinstance(item, dict):
+                                        continue
+                                    st.markdown(f"**{idx}. {item.get('conclusion', '无结论')}**")
+                                    for label, key in fields:
+                                        value = str(item.get(key, "")).strip()
+                                        if value:
+                                            st.markdown(f"- {label}：{value}")
+                                    st.markdown("---")
+                            strengths_chain = reasoning_obj.get("strengths_reasoning_chain") or []
+                            weaknesses_chain = reasoning_obj.get("weaknesses_reasoning_chain") or []
+                            render_chain(
+                                "优势推理链",
+                                strengths_chain,
+                                [
+                                    ("detected_actions", "detected_actions"),
+                                    ("resume_evidence", "resume_evidence"),
+                                    ("ai_reasoning", "ai_reasoning"),
+                                ],
+                            )
+                            render_chain(
+                                "劣势推理链",
+                                weaknesses_chain,
+                                [
+                                    ("resume_gap", "resume_gap"),
+                                    ("compare_to_jd", "compare_to_jd"),
+                                    ("ai_reasoning", "ai_reasoning"),
+                                ],
+                            )
 
                     # ✅ 一键修复版：AI 匹配完成后自动保存 & 跳转
 
@@ -658,7 +791,7 @@ with tab2:
                         import os
                         output_path = os.path.join("data", "ai_match_results.csv")
                         try:
-                            result_df.to_csv(output_path, index=False, encoding="utf-8-sig")
+                            export_df.to_csv(output_path, index=False, encoding="utf-8-sig")
                             st.write(f"✅ 已自动保存匹配结果至 `{output_path}`")
                         except Exception as e:
                             st.warning(f"⚠️ 保存CSV失败: {e}")
@@ -666,7 +799,7 @@ with tab2:
                         # （可选）提供下载按钮
                         st.download_button(
                             label="⬇️ 下载 AI 匹配结果（CSV）",
-                            data=result_df.to_csv(index=False).encode("utf-8-sig"),
+                            data=export_df.to_csv(index=False).encode("utf-8-sig"),
                             file_name="ai_match_results.csv",
                             mime="text/csv"
                         )
@@ -697,11 +830,28 @@ with tab4:
     st.subheader("🤖 一键邀约 + 自动排期")
     st.markdown("让AI帮你生成个性化邀约邮件（含候选亮点 + 日历附件）")
 
+    # 优先使用去重&排序后的shortlist，如果没有则使用原始score_df
+    shortlist = st.session_state.get("shortlist")
     score_df = st.session_state.get("score_df")
-    if score_df is None or score_df.empty:
-        st.warning("请先完成AI匹配评分。")
-    else:
+    
+    if shortlist is not None and not shortlist.empty:
+        # 使用去重&排序后的结果
+        df = shortlist.copy()
+        st.info(f"✅ 已使用「去重&排序」步骤筛选后的 Top-{len(df)} 名候选人")
+    elif score_df is not None and not score_df.empty:
+        # 如果没有shortlist，使用原始score_df（需要先排序）
         df = score_df.copy()
+        # 按总分降序排序
+        if "总分" in df.columns:
+            df = df.sort_values(by="总分", ascending=False, ignore_index=True)
+        elif "score_total" in df.columns:
+            df = df.sort_values(by="score_total", ascending=False, ignore_index=True)
+        st.warning("⚠️ 建议先在「去重&排序」步骤中筛选候选人，当前使用原始评分结果（已按总分排序）")
+    else:
+        st.warning("请先完成AI匹配评分。")
+        df = None
+    
+    if df is not None and not df.empty:
         max_candidates = len(df)
         default_top = min(5, max_candidates)
         top_n = st.number_input(
@@ -715,7 +865,24 @@ with tab4:
         selected_candidates = df.head(top_n)
 
         score_col = "总分" if "总分" in df.columns else "score_total" if "score_total" in df.columns else None
-        display_cols = [col for col in ["file", "email", score_col] if col and col in df.columns]
+        display_cols = [
+            col
+            for col in [
+                "name",
+                "file",
+                "email",
+                "phone",
+                score_col,
+                "技能匹配度",
+                "经验相关性",
+                "成长潜力",
+                "稳定性",
+                "short_eval",
+                "highlights",
+                "resume_mini",
+            ]
+            if col and col in df.columns
+        ]
         if not display_cols:
             display_cols = df.columns.tolist()
 

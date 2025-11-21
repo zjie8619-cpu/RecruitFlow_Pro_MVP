@@ -6,13 +6,17 @@ expected by the Streamlit UI.
 
 from __future__ import annotations
 
+import io
 import json
 import math
 import re
+import sys
+import textwrap
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 import pandas as pd
 
+from backend.services.ai_insights import FALLBACK_RESPONSE, generate_ai_insights
 from backend.services.text_rules import sanitize_for_job, strip_competition_terms
 
 
@@ -185,6 +189,95 @@ def _short_eval(total: float, skill: float, exp: float, growth: float) -> str:
     )
 
 
+def _format_short_eval_struct(short_eval: Dict[str, Any] | None) -> str:
+    if not isinstance(short_eval, dict):
+        short_eval = {}
+    strengths = short_eval.get("core_strengths") or short_eval.get("strengths") or []
+    weaknesses = short_eval.get("core_weaknesses") or short_eval.get("weaknesses") or []
+    match_level = short_eval.get("match_level") or "无法评估"
+    match_reason = short_eval.get("match_reason") or ""
+
+    parts = ["【优势】"]
+    if strengths:
+        for idx, value in enumerate(strengths, 1):
+            parts.append(f"{idx}. {value}")
+    else:
+        parts.append("1. 无明显优势")
+
+    parts.append("")
+    parts.append("【劣势】")
+    if weaknesses:
+        for idx, value in enumerate(weaknesses, 1):
+            parts.append(f"{idx}. {value}")
+    else:
+        parts.append("1. 无明显劣势")
+
+    parts.append("")
+    parts.append("【匹配度】")
+    reason = f"{match_level} {match_reason}".strip()
+    parts.append(reason or match_level or "无法评估")
+
+    return "\n".join(parts).strip()
+
+
+def _trim_text(value: str, limit: int = 80) -> str:
+    text = (value or "").strip()
+    if len(text) > limit:
+        return text[:limit].rstrip() + "..."
+    return text
+
+
+def _format_reasoning_text(evidence_struct: Dict[str, Any]) -> str:
+    if not isinstance(evidence_struct, dict):
+        return ""
+
+    lines: List[str] = []
+    strengths = evidence_struct.get("strengths_reasoning_chain") or []
+    weaknesses = evidence_struct.get("weaknesses_reasoning_chain") or []
+
+    if strengths:
+        lines.append("【优势】")
+        for idx, item in enumerate(strengths, 1):
+            if not isinstance(item, dict):
+                continue
+            conclusion = _trim_text(item.get("conclusion", ""), 24)
+            actions = _trim_text(item.get("detected_actions", ""), 32)
+            resume_evidence = _trim_text(item.get("resume_evidence", ""), 60)
+            reasoning = _trim_text(item.get("ai_reasoning", ""), 40)
+            segments = [
+                conclusion,
+                f"动作:{actions}" if actions else "",
+                f"证据:{resume_evidence}" if resume_evidence else "",
+                f"推断:{reasoning}" if reasoning else "",
+            ]
+            segments = [seg for seg in segments if seg]
+            if segments:
+                lines.append(f"{idx}. " + "｜".join(segments))
+
+    if weaknesses:
+        if lines:
+            lines.append("")
+        lines.append("【劣势】")
+        for idx, item in enumerate(weaknesses, 1):
+            if not isinstance(item, dict):
+                continue
+            conclusion = _trim_text(item.get("conclusion", ""), 24)
+            gap = _trim_text(item.get("resume_gap", ""), 32)
+            compare = _trim_text(item.get("compare_to_jd", ""), 60)
+            reasoning = _trim_text(item.get("ai_reasoning", ""), 40)
+            segments = [
+                conclusion,
+                f"缺口:{gap}" if gap else "",
+                f"JD:{compare}" if compare else "",
+                f"风险:{reasoning}" if reasoning else "",
+            ]
+            segments = [seg for seg in segments if seg]
+            if segments:
+                lines.append(f"{idx}. " + "｜".join(segments))
+
+    return "\n".join(lines).strip()
+
+
 def _heuristic_score_from_text(
     jd_text: str, resume_text: str, job_title: str = ""
 ) -> Dict[str, Any]:
@@ -198,8 +291,15 @@ def _heuristic_score_from_text(
     resume_tokens = set(_tokenize(resume_text or ""))
     text_len = len(resume_text or "")
 
+    # 技能匹配度：基于关键词重叠（岗位匹配度的核心指标）
     skill_score = _keyword_overlap_score(resume_tokens, job_tokens)
-    exp_score = _length_score(text_len)
+    
+    # 经验相关性：结合文本长度和岗位匹配度（更关注岗位匹配）
+    base_exp_score = _length_score(text_len)
+    # 如果技能匹配度高，经验相关性也应该相应提高（岗位匹配度高）
+    exp_match_boost = skill_score * 0.3  # 技能匹配度高的，经验相关性也高
+    exp_score = _normalize_score(base_exp_score * 0.7 + exp_match_boost, 0, 100)
+    
     growth_score = _growth_score(resume_text or "")
     stability_score = _stability_score(resume_text or "")
 
@@ -210,13 +310,14 @@ def _heuristic_score_from_text(
     growth_score = _normalize_score(growth_score + edu_growth_boost, 0, 100)
 
     # 经验分额外考虑教育背景（硕博经历通常伴随科研经验）
-    exp_score = _normalize_score(exp_score + edu_skill_boost * 0.4, 0, 100)
+    exp_score = _normalize_score(exp_score + edu_skill_boost * 0.2, 0, 100)
 
+    # 使用与AI评分一致的权重（强调岗位匹配度）
     total = (
-        skill_score * 0.45
-        + exp_score * 0.25
-        + growth_score * 0.2
-        + stability_score * 0.1
+        skill_score * 0.30  # 技能匹配度：30%
+        + exp_score * 0.30  # 经验相关性：30%（岗位匹配度的关键）
+        + growth_score * 0.20  # 成长潜力：20%
+        + stability_score * 0.20  # 稳定性：20%
     )
     total = round(total, 1)
 
@@ -301,11 +402,12 @@ def _heuristic_match_resumes_df(
         growth_score = _growth_score(resume_text)
         stability_score = _stability_score(resume_text)
 
+        # 使用与AI评分一致的权重（强调岗位匹配度）
         total = (
-            skill_score * 0.4
-            + exp_score * 0.3
-            + growth_score * 0.2
-            + stability_score * 0.1
+            skill_score * 0.30  # 技能匹配度：30%
+            + exp_score * 0.30  # 经验相关性：30%（岗位匹配度的关键）
+            + growth_score * 0.20  # 成长潜力：20%
+            + stability_score * 0.20  # 稳定性：20%
         )
         total = round(total, 1)
 
@@ -447,19 +549,38 @@ def _get_temperature(cfg: Any) -> float:
 
 
 SHORT_EVAL_PROMPT = """
-你是一名专业的教育行业 HR，请基于候选人的真实简历内容，用一句中文生成 20~40 字的高度概括评价。
+你是一名专业的招聘HR，请基于候选人的真实简历内容和岗位JD，生成结构化的评价。
 
-要求：
-- 必须从简历内容中提炼，禁止使用模板句
-- 必须准确反映候选人的专业背景、经验特点或亮点
-- 如果是教师/教练岗位，严禁出现"销售、开发客户、拉新、转化、邀约、电销"等与教育无关的词
-- 允许使用"沟通、负责、授课、家长、学生、教学"等教育行业正常词汇
-- 不得捏造不存在的经历
-- 不得输出"简历信息不足"或类似话术
-- 若文本为空，则直接返回："简历解析失败，请检查文件格式"
+【岗位JD】
+{jd_text}
 
-【简历内容】
+【候选人简历】
 {resume_text}
+
+**生成逻辑**：
+- 优势 = 简历中符合 JD 要求的点（列出2-3条）
+- 劣势 = 简历中未体现但 JD 要求的点（列出1-2条，如无则写"无明显劣势"）
+- 匹配度 = 对 JD 的关键要求、经验相关度、岗位动作匹配度进行综合判断（高/中/低）
+
+**输出格式（严格按此结构，不可变更）**：
+
+【优势】
+1. [第一条优势，基于简历真实内容]
+2. [第二条优势，基于简历真实内容]
+
+【劣势】
+1. [第一条劣势，JD要求但简历未体现]
+2. [第二条劣势，如无则写"无明显劣势"]
+
+【匹配度】
+[高/中/低] [一句话解释原因，基于优势劣势分析]
+
+**要求**：
+- 必须基于简历和JD的真实内容，禁止捏造
+- 优势必须对应JD要求，劣势必须对应JD要求但简历未体现
+- 匹配度判断必须基于优势劣势的综合分析
+- 文风专业、简洁，不堆砌形容词
+- 适配所有岗位类型（销售、市场、运营、行政、技术、教师等）
 """
 
 
@@ -481,321 +602,122 @@ def _prepare_resume_text(file_text: str) -> str:
     return "\n\n".join(chunks)
 
 
-def _generate_short_eval(client, cfg, resume_text: str, job_title: str) -> str:
+def _generate_short_eval(client, cfg, resume_text: str, jd_text: str, job_title: str) -> str:
     """
     生成候选人的简短评价（short_eval）
-    确保返回真实的 AI 评价，而不是异常提示
+    包含优势、劣势和岗位匹配评价
     """
     cleaned_text = (resume_text or "").strip()
     if not cleaned_text:
         return "简历解析失败，请检查文件格式"
 
     try:
-        # 使用分段逻辑，确保完整传入（简评也需要看到完整简历）
+        # 使用分段逻辑，确保完整传入
         prepared_resume = _prepare_resume_text(cleaned_text)
-        prompt = SHORT_EVAL_PROMPT.format(resume_text=prepared_resume)
+        prepared_jd = jd_text[:2000] if len(jd_text) > 2000 else jd_text  # JD不需要分段，但限制长度
+        prompt = SHORT_EVAL_PROMPT.format(resume_text=prepared_resume, jd_text=prepared_jd)
         
         res = chat_completion(
             client,
             cfg,
             messages=[
-                {"role": "system", "content": "你是一名专业的教育行业 HR，擅长从简历中提炼候选人亮点。"},
+                {"role": "system", "content": "你是一名专业的招聘HR，擅长结构化分析候选人简历与岗位的匹配度，输出格式必须严格遵循要求。"},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.4,
-            max_tokens=150,
+            max_tokens=400,  # 增加token数量以支持结构化输出
         )
         content = res["choices"][0]["message"]["content"].strip()
         
-        # 轻度清洗：只去除明显的销售词汇，保留原始评价
-        if content:
-            # 对于教育行业岗位，只去除明显不相关的词汇
-            education_keywords = ["课程", "顾问", "教师", "教练", "招生", "学管"]
-            is_education = any(k in job_title for k in education_keywords)
-            
-            if is_education:
-                # 教育行业：只去除销售词汇，保留其他所有内容
-                sales_words = ["开发客户", "拉新", "转化", "邀约", "电销"]
-                for word in sales_words:
-                    content = content.replace(word, "")
-                content = re.sub(r"\s+", " ", content).strip()
-            else:
-                # 非教育行业：轻度清洗，但保留原始内容
-                content = sanitize_ai_output(content, job_title)
-                # 如果被替换为异常提示，尝试使用原始内容
-                if "存在异常" in content:
-                    # 回退到原始内容，只做最基本的清理
-                    content = res["choices"][0]["message"]["content"].strip()
-        
-        # 确保 short_eval 永不被清空或被替换为异常提示
-        if not content or not content.strip() or "存在异常" in content:
-            # 如果内容为空或被替换为异常，使用原始 AI 返回
-            original_content = res["choices"][0]["message"]["content"].strip()
-            if original_content and len(original_content) > 10:
-                content = original_content[:100]  # 使用原始内容的前100字符
-            else:
-                # 最后的兜底：生成一个通用的评价
-                content = "该候选人具备相关工作经验，请结合简历进一步评估。"
+        # 确保内容不为空，并验证格式
+        if not content or not content.strip():
+            content = "【优势】\n1. 无明显优势\n\n【劣势】\n1. 无明显劣势\n\n【匹配度】\n低 简历信息不足，无法准确评估"
+        else:
+            # 验证格式是否包含必要的结构标记
+            if "【优势】" not in content or "【劣势】" not in content or "【匹配度】" not in content:
+                # 如果格式不对，尝试修复或使用默认格式
+                content = "【优势】\n1. 无明显优势\n\n【劣势】\n1. 无明显劣势\n\n【匹配度】\n低 简历信息不足，无法准确评估"
         
         return content
     except Exception as err:
-        # API 调用失败时，返回错误信息而不是异常提示
-        error_msg = f"AI评价生成失败：{str(err)[:50]}"
-        return error_msg
+        # API 调用失败时，返回错误信息
+        error_msg = f"AI评价生成失败：{str(err)[:30]}"
+        return f"【优势】\n1. 无明显优势\n\n【劣势】\n1. 无明显劣势\n\n【匹配度】\n低 {error_msg}"
 
 
 def ai_score_one(client, cfg, jd_text: str, resume_text: str, job_title: str = "") -> Dict[str, Any]:
-    """
-    对单个候选人进行 AI 评分
-    所有字符串处理都使用安全的编码方式
-    """
-    try:
-        # 使用统一的防幻觉系统提示词
-        # 步骤1：强制分段，确保完整传入
-        prepared_resume = _prepare_resume_text(resume_text)
+    """综合启发式匹配和智能诊断，输出统一结构。"""
+    safe_resume_text = _safe_str(resume_text or "")
+    jd_clean = (jd_text or "").strip()
+    job_title_clean = (job_title or "").strip()
 
-        prompt = f"""
-你是资深招聘面试官。请基于下面信息对候选人进行匹配评分，返回中文 JSON，且只返回 JSON：
+    missing_required = not jd_clean or not safe_resume_text.strip() or not job_title_clean
 
-【岗位 JD】
-{jd_text}
-
-【候选人简历】
-{prepared_resume}
-
-评分口径（总分 100）：
-- 技能匹配度（30）
-- 经验相关性（30）
-- 成长潜力（20）
-- 稳定性与岗位适配性（20）
-
-请根据你能识别到的信息进行评分。
-某些字段缺失（如项目/教育/技能）属于正常情况，不要返回"信息不足"。
-如果某部分缺失，请在输出中注明：
-"此部分信息缺失，已按已有信息进行估算。"
-
-永远不要返回"信息不足"。
-
-输出严格 JSON：
-{{
-  "总分": <0-100的整数>,
-  "维度得分": {{
-    "技能匹配度": <0-30>,
-    "经验相关性": <0-30>,
-    "成长潜力": <0-20>,
-    "稳定性": <0-20>
-  }},
-  "证据": ["使用简历中的引用语句或要点，2-4条"],
-  "简评": "一句中文总结"
-}}
-只返回 JSON 对象，不能包含任何解释。
-"""
-        res = chat_completion(
-            client,
-            cfg,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=_get_temperature(cfg),
-        )
-        
-        # 步骤3：JSON 输出容错补丁
-        raw_content = res["choices"][0]["message"]["content"]
-        try:
-            data = _parse_ai_json(raw_content)
-        except Exception as e:
-            fallback = _heuristic_score_from_text(jd_text, resume_text, job_title)
-            fallback["解析错误"] = _safe_str(e)[:100]
-            return fallback
-
-        try:
-            data, dimensions_all_zero = _normalize_ai_scores(data)
-        except Exception as e:
-            fallback = _heuristic_score_from_text(jd_text, resume_text, job_title)
-            fallback["解析错误"] = _safe_str(e)[:100]
-            return fallback
-        
-        # 🚫 防幻觉过滤：清理"证据"和"简评"（优化版，避免过度清洗）
-        if job_title:
-            evidence_list = data.get("证据", [])
-        
-        # 判断是否为教育行业岗位
-        education_keywords = ["课程", "顾问", "教师", "教练", "招生", "学管", "班主任", "教研"]
-        is_education = any(k in job_title for k in education_keywords)
-        
-        if is_education:
-            # 教育行业岗位：只去除明显的销售词汇，保留所有其他内容
-            cleaned_evidence = []
-            for ev in evidence_list:
-                if ev and ev.strip():
-                    # 只去除销售相关词汇
-                    cleaned = ev
-                    for word in ["开发客户", "拉新", "转化", "邀约", "电销"]:
-                        cleaned = cleaned.replace(word, "")
-                    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-                    if cleaned:
-                        cleaned_evidence.append(cleaned)
-            
-            # 简评也做同样处理
-            summary_text = data.get("简评", "")
-            if summary_text:
-                for word in ["开发客户", "拉新", "转化", "邀约", "电销"]:
-                    summary_text = summary_text.replace(word, "")
-                summary_text = re.sub(r"\s+", " ", summary_text).strip()
-            
-            data["证据"] = cleaned_evidence
-            data["简评"] = summary_text
-        else:
-            # 非教育岗位：轻度清洗，但保留原始内容
-            cleaned_evidence = []
-            for ev in evidence_list:
-                if ev and ev.strip():
-                    cleaned = sanitize_ai_output(ev, job_title)
-                    # 如果被替换为异常提示，保留原始证据
-                    if "存在异常" in cleaned:
-                        cleaned = ev  # 回退到原始证据
-                    if cleaned and cleaned.strip():
-                        cleaned_evidence.append(cleaned)
-            
-            summary_text = data.get("简评", "")
-            if summary_text:
-                cleaned_summary = sanitize_ai_output(summary_text, job_title)
-                # 如果被替换为异常提示，保留原始简评
-                if "存在异常" in cleaned_summary:
-                    cleaned_summary = summary_text
-                summary_text = cleaned_summary
-            
-            data["证据"] = cleaned_evidence
-            data["简评"] = summary_text
-
-        applied_zero_fallback = False
-        resume_length = len((resume_text or "").strip())
-        if dimensions_all_zero and resume_length > 150:
-            heuristic_scores = _heuristic_score_from_text(jd_text, resume_text, job_title)
-            data["维度得分"] = heuristic_scores["维度得分"]
-            data["总分"] = heuristic_scores["总分"]
-            if not data.get("证据"):
-                data["证据"] = heuristic_scores["证据"]
-            if not data.get("简评"):
-                data["简评"] = heuristic_scores["简评"]
-            applied_zero_fallback = True
-
-        try:
-            ai_summary = _generate_short_eval(client, cfg, resume_text, job_title)
-            # 确保不是异常提示（使用安全的字符串检查）
-            try:
-                ai_summary_str = _safe_str(ai_summary)
-                if ai_summary_str and "存在异常" in ai_summary_str:
-                    # 如果被替换为异常提示，使用简评作为替代
-                    ai_summary = data.get("简评", "该候选人具备相关工作经验，请结合简历进一步评估。")
-            except (UnicodeEncodeError, UnicodeError):
-                # 如果检查时出现编码错误，直接使用简评
-                ai_summary = data.get("简评", "该候选人具备相关工作经验，请结合简历进一步评估。")
-        except Exception as err:
-            # API 调用失败时，使用简评或生成通用评价
-            try:
-                err_str = _safe_str(err)[:50]
-                ai_summary = data.get("简评", f"AI评价生成失败：{err_str}")
-                data["短评_error"] = err_str
-            except (UnicodeEncodeError, UnicodeError):
-                ai_summary = data.get("简评", "该候选人具备相关工作经验，请结合简历进一步评估。")
-                data["短评_error"] = "编码错误"
-        try:
-            if applied_zero_fallback:
-                data["short_eval"] = f"[AI 初始评分为 0，已回退启发式] {ai_summary}"
-            else:
-                data["short_eval"] = ai_summary
-        except (UnicodeEncodeError, UnicodeError):
-            # 如果赋值时出现编码错误，使用安全的默认值
-            data["short_eval"] = "该候选人具备相关工作经验，请结合简历进一步评估。"
-        
-        # 🔧 最终统一替换：确保所有字段都不包含异常提示
-        fallback_text = "该候选人具备相关工作经验，请结合简历进一步评估。"
-        
-        # 替换证据中的异常提示（使用安全的字符串处理）
-        try:
-            evidence_list = data.get("证据", [])
-            cleaned_evidence = []
-            for ev in evidence_list:
-                try:
-                    # 安全地转换和检查字符串
-                    ev_str = _safe_str(ev)
-                    # 安全地检查字符串，避免编码错误
-                    if ev_str:
-                        try:
-                            if "存在异常" not in ev_str:
-                                cleaned_evidence.append(ev)
-                        except (UnicodeEncodeError, UnicodeError):
-                            # 如果检查时出错，跳过这个证据
-                            continue
-                except (UnicodeEncodeError, UnicodeError, Exception):
-                    # 如果处理单个证据时出错，跳过它
-                    continue
-            if not cleaned_evidence and evidence_list:
-                # 如果所有证据都被过滤，至少保留一条通用描述
-                cleaned_evidence = ["候选人具备相关工作经验。"]
-            data["证据"] = cleaned_evidence
-        except (UnicodeEncodeError, UnicodeError, Exception) as e:
-            # 如果处理证据时出错，使用默认值
-            data["证据"] = ["候选人具备相关工作经验。"]
-        
-        # 替换简评中的异常提示（使用安全的字符串处理）
-        try:
-            if "简评" in data:
-                summary = data["简评"]
-                if summary:
-                    try:
-                        # 安全地转换字符串
-                        summary_str = _safe_str(summary)
-                        # 安全地检查字符串
-                        try:
-                            if summary_str and "存在异常" in summary_str:
-                                data["简评"] = fallback_text
-                        except (UnicodeEncodeError, UnicodeError):
-                            data["简评"] = fallback_text
-                    except (UnicodeEncodeError, UnicodeError):
-                        data["简评"] = fallback_text
-        except (UnicodeEncodeError, UnicodeError, Exception):
-            if "简评" in data:
-                data["简评"] = fallback_text
-        
-        # 替换 short_eval 中的异常提示（使用安全的字符串处理）
-        try:
-            if "short_eval" in data:
-                short_eval = data["short_eval"]
-                if short_eval:
-                    try:
-                        # 安全地转换字符串
-                        short_eval_str = _safe_str(short_eval)
-                        # 安全地检查字符串
-                        try:
-                            if short_eval_str and "存在异常" in short_eval_str:
-                                data["short_eval"] = fallback_text
-                        except (UnicodeEncodeError, UnicodeError):
-                            data["short_eval"] = fallback_text
-                    except (UnicodeEncodeError, UnicodeError):
-                        data["short_eval"] = fallback_text
-        except (UnicodeEncodeError, UnicodeError, Exception):
-            if "short_eval" in data:
-                data["short_eval"] = fallback_text
-        
-        return data
-    except (UnicodeEncodeError, UnicodeError) as e:
-        # 如果整个函数执行过程中出现编码错误，返回安全的默认值
-        return {
+    if missing_required:
+        heuristic_scores = {
             "总分": 0,
-            "维度得分": {"技能匹配度": 0, "经验相关性": 0, "成长潜力": 0, "稳定性": 0},
-            "证据": ["候选人具备相关工作经验。"],
-            "简评": "该候选人具备相关工作经验，请结合简历进一步评估。",
-            "short_eval": "该候选人具备相关工作经验，请结合简历进一步评估。",
-            "编码错误": "处理过程中出现编码问题，已使用默认值"
+            "维度得分": {
+                "技能匹配度": 0,
+                "经验相关性": 0,
+                "成长潜力": 0,
+                "稳定性": 0,
+            },
         }
-    except Exception as e:
-        # 其他异常：使用启发式评分兜底，而不是全 0 分
-        fallback = _heuristic_score_from_text(jd_text, resume_text, job_title)
-        fallback["处理错误"] = _safe_str(e)[:100]
-        return fallback
+        insights = FALLBACK_RESPONSE.copy()
+    else:
+        heuristic_scores = _heuristic_score_from_text(jd_text, safe_resume_text, job_title_clean)
+        insights = generate_ai_insights(job_title_clean, safe_resume_text)
+
+    data = dict(heuristic_scores)
+    data["ability_model"] = insights.get("ability_model", {})
+
+    def _merge_scores():
+        scores = insights.get("scores") or {}
+        dim = data.get("维度得分", {})
+        data["总分"] = float(scores.get("total_score", data.get("总分", 0)))
+        data["维度得分"] = {
+            "技能匹配度": float(scores.get("skill_match", dim.get("技能匹配度", 0))),
+            "经验相关性": float(scores.get("experience_match", dim.get("经验相关性", 0))),
+            "成长潜力": float(scores.get("growth_potential", dim.get("成长潜力", 0))),
+            "稳定性": float(scores.get("stability", dim.get("稳定性", 0))),
+        }
+        data["score_explain"] = scores.get("score_explain", "")
+
+    def _apply_short_eval():
+        short_eval_struct = insights.get("short_eval") or {}
+        data["short_eval_struct"] = short_eval_struct
+        data["short_eval"] = _format_short_eval_struct(short_eval_struct)
+
+    def _apply_evidence():
+        evidence_struct = insights.get("evidence") or {}
+        data["reasoning_chain"] = evidence_struct
+        formatted = _format_reasoning_text(evidence_struct)
+        if not formatted:
+            formatted = (
+                "【优势推理链】\n1. 暂无有效证据\n\n"
+                "【劣势推理链】\n1. 简历未体现相关内容"
+            )
+        data["证据"] = formatted
+
+    def _apply_ui():
+        ui_struct = insights.get("ui") or {"row_display": "", "highlights": []}
+        data["summary_for_ui"] = ui_struct
+
+    data["resume_mini"] = insights.get("resume_text", "")
+
+    if not insights.get("fallback") and not missing_required:
+        _merge_scores()
+    else:
+        data["总分"] = 0
+        data["维度得分"] = {"技能匹配度": 0, "经验相关性": 0, "成长潜力": 0, "稳定性": 0}
+        data["score_explain"] = ""
+
+    _apply_short_eval()
+    _apply_evidence()
+    _apply_ui()
+
+    return data
+
 
 
 def ai_match_resumes_df(jd_text: str, resumes_df: pd.DataFrame, job_title: str = "") -> pd.DataFrame:
@@ -870,24 +792,59 @@ def ai_match_resumes_df(jd_text: str, resumes_df: pd.DataFrame, job_title: str =
         else:
             result = _heuristic_score_from_text(jd_text, resume_text, effective_job_label)
 
-        rows.append(
-            {
-                "candidate_id": resumes_df.loc[idx, "candidate_id"] if "candidate_id" in resumes_df.columns else None,
-                "file": file_name,
-                "name": resumes_df.loc[idx, "name"] if "name" in resumes_df.columns else "",
-                "email": resumes_df.loc[idx, "email"] if "email" in resumes_df.columns else "",
-                "phone": resumes_df.loc[idx, "phone"] if "phone" in resumes_df.columns else "",
-                "resume_text": resume_text,
-                "总分": result.get("总分", 0),
-                "技能匹配度": result.get("维度得分", {}).get("技能匹配度", 0),
-                "经验相关性": result.get("维度得分", {}).get("经验相关性", 0),
-                "成长潜力": result.get("维度得分", {}).get("成长潜力", 0),
-                "稳定性": result.get("维度得分", {}).get("稳定性", 0),
-                "short_eval": result.get("short_eval") or result.get("简评", ""),
-                "证据": _safe_join(result.get("证据") or [], "；"),
-                "text_len": resumes_df.loc[idx, "text_len"] if "text_len" in resumes_df.columns else len(resume_text),
-            }
-        )
+        # 构建行数据
+        row_data = {
+            "candidate_id": resumes_df.loc[idx, "candidate_id"] if "candidate_id" in resumes_df.columns else None,
+            "file": file_name,
+            "name": resumes_df.loc[idx, "name"] if "name" in resumes_df.columns else "",
+            "email": resumes_df.loc[idx, "email"] if "email" in resumes_df.columns else "",
+            "phone": resumes_df.loc[idx, "phone"] if "phone" in resumes_df.columns else "",
+            "resume_text": resume_text,
+            "resume_mini": result.get("resume_mini", ""),
+            "总分": result.get("总分", 0),
+            "技能匹配度": result.get("维度得分", {}).get("技能匹配度", 0),
+            "经验相关性": result.get("维度得分", {}).get("经验相关性", 0),
+            "成长潜力": result.get("维度得分", {}).get("成长潜力", 0),
+            "稳定性": result.get("维度得分", {}).get("稳定性", 0),
+            "short_eval": result.get("short_eval") or result.get("简评", ""),
+            "short_eval_struct": json.dumps(result.get("short_eval_struct", {}), ensure_ascii=False),
+            "ability_model": json.dumps(result.get("ability_model", {}), ensure_ascii=False),
+            "reasoning_chain": json.dumps(result.get("reasoning_chain", {}), ensure_ascii=False),
+            "证据": result.get("证据") if isinstance(result.get("证据"), str) else (
+                "\n".join(result.get("证据") or []) if isinstance(result.get("证据"), list) else "【优势证据】\n1. 优势 → 简历未体现相关内容\n\n【劣势证据】\n1. 劣势 → 简历未体现相关内容"
+            ),
+            "text_len": resumes_df.loc[idx, "text_len"] if "text_len" in resumes_df.columns else len(resume_text),
+        }
+        
+        # 添加新格式的字段（如果存在）
+        if "score_explain" in result:
+            row_data["score_explain"] = result["score_explain"]
+        
+        summary_ui = result.get("summary_for_ui") or {}
+        if isinstance(summary_ui, dict):
+            row_display = summary_ui.get("row_display", "")
+            highlight_list = summary_ui.get("highlights", [])
+        else:
+            row_display = ""
+            highlight_list = []
+
+        if not row_display:
+            row_display = (
+                result.get("short_eval_struct", {}).get("match_reason", "").strip()
+                or "匹配结果待人工复核"
+            )[:18]
+
+        if not isinstance(highlight_list, list) or not highlight_list:
+            strengths = result.get("short_eval_struct", {}).get("core_strengths", [])
+            if isinstance(strengths, list):
+                highlight_list = [s[:4] for s in strengths[:2]]
+            else:
+                highlight_list = []
+
+        row_data["row_display"] = row_display
+        row_data["highlights"] = "｜".join([h for h in highlight_list if h])
+        
+        rows.append(row_data)
 
     df = pd.DataFrame(rows)
 
