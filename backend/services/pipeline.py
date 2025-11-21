@@ -192,6 +192,7 @@ class RecruitPipeline:
     def dedup_and_rank(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         对候选人结果去重并按得分排序，自动识别常见的得分列名。
+        去重时保留得分最高的记录。
         """
 
         possible_cols = ["score_total", "总分", "score", "match_score", "AI_score"]
@@ -200,11 +201,16 @@ class RecruitPipeline:
         if not score_col:
             raise KeyError(f"未找到评分列, 请确认包含以下任一字段: {possible_cols}")
 
+        # 先按分数排序，确保去重时保留最高分的记录
+        df = df.sort_values(score_col, ascending=False).reset_index(drop=True)
+        
+        # 去重时保留第一条（即最高分）记录
         if "file" in df.columns:
             df = df.drop_duplicates(subset=["file"], keep="first")
         elif "candidate_id" in df.columns:
             df = df.drop_duplicates(subset=["candidate_id"], keep="first")
 
+        # 重新排序并添加排名
         df = df.sort_values(score_col, ascending=False).reset_index(drop=True)
         df["rank"] = df.index + 1
 

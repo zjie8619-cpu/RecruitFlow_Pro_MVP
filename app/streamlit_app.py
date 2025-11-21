@@ -5,7 +5,7 @@ import time
 
 import pandas as pd
 import streamlit as st
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from backend.storage.db import init_db, get_db
 from backend.services.pipeline import RecruitPipeline
@@ -24,7 +24,50 @@ if 'backend.services.ai_matcher' in sys.modules:
     importlib.reload(sys.modules['backend.services.ai_matcher'])
 from backend.services.ai_matcher import ai_match_resumes_df
 from backend.services.ai_core import generate_ai_summary, generate_ai_email
+# 🔄 强制重新加载日历工具模块，确保使用最新版本
+if 'backend.services.calendar_utils' in sys.modules:
+    importlib.reload(sys.modules['backend.services.calendar_utils'])
+# 删除可能存在的旧导入
+if 'create_ics_file' in globals():
+    del create_ics_file
 from backend.services.calendar_utils import create_ics_file
+
+def add_name_title(name: str, row_dict: dict = None) -> str:
+    """
+    给姓名添加先生/女士称呼
+    
+    Args:
+        name: 候选人姓名
+        row_dict: 候选人数据字典（可选，用于提取性别信息）
+    
+    Returns:
+        带称呼的姓名，如"张三先生"或"李四女士"
+    """
+    if not name or name == "匿名候选人":
+        return "先生/女士"
+    
+    # 尝试从数据中提取性别信息
+    gender = None
+    if row_dict:
+        # 尝试从多个可能的字段中提取性别
+        gender_text = str(row_dict.get("gender", "") or row_dict.get("性别", "") or "").strip()
+        if "女" in gender_text:
+            gender = "女"
+        elif "男" in gender_text:
+            gender = "男"
+    
+    # 如果没有明确的性别信息，尝试从姓名判断（简单规则）
+    if not gender:
+        # 常见女性名字特征（简单判断，不准确但可用）
+        female_name_chars = ["霞", "芳", "娜", "敏", "静", "丽", "艳", "红", "玲", "雪", "梅", "兰", "菊", "莲", "花", "月", "春", "秋", "冬", "美", "秀", "英", "华", "慧", "娟", "莉", "萍", "燕", "凤", "婷", "欣", "悦", "怡", "琳", "莹", "雯", "雅", "洁", "倩", "薇", "茜", "蓉", "菲", "瑶", "璐", "瑾", "璇", "璐", "璐", "璐"]
+        # 如果名字最后一个字在女性名字特征中，使用"女士"
+        if len(name) >= 2 and name[-1] in female_name_chars:
+            gender = "女"
+        else:
+            # 默认使用"先生"
+            gender = "男"
+    
+    return f"{name}{'女士' if gender == '女' else '先生'}"
 # from backend.services.excel_exporter import generate_competency_excel, export_ability_sheet_to_file  # 函数不存在，已注释
 
 # 强制重新加载 Excel 导出模块，确保模板样式调整后前端立即生效
@@ -929,11 +972,49 @@ with tab3:
         score_source = st.session_state["scored"]
 
     if score_source is not None:
+        # 去重排序
         deduped = pipe.dedup_and_rank(score_source)
         st.session_state["shortlist"] = deduped.head(topn)
-        # 汉化显示
-        deduped_display = translate_dataframe_columns(deduped.head(topn))
-        st.dataframe(deduped_display, use_container_width=True)
+        
+        # 使用与tab2完全一致的字段显示顺序和逻辑
+        display_columns = [
+            "candidate_id",
+            "name",
+            "file",
+            "总分",
+            "技能匹配度",
+            "经验相关性",
+            "成长潜力",
+            "稳定性",
+            "short_eval",
+            "highlights",
+            "resume_mini",
+            "证据",
+        ]
+        
+        # 只选择存在的列，保持顺序（与tab2逻辑完全一致）
+        existing_display = [col for col in display_columns if col in deduped.columns]
+        if existing_display:
+            # 创建显示用的DataFrame副本，确保数据不被修改
+            deduped_display = deduped.head(topn)[existing_display].copy()
+            
+            # 对resume_mini进行长度限制（与tab2完全一致）
+            if "resume_mini" in deduped_display.columns:
+                deduped_display["resume_mini"] = deduped_display["resume_mini"].apply(
+                    lambda x: (x[:80] + "…") if isinstance(x, str) and len(x) > 80 else x
+                )
+            
+            # 汉化显示（与tab2完全一致）
+            deduped_display = translate_dataframe_columns(deduped_display)
+            st.dataframe(
+                deduped_display,
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            # 如果没有匹配的列，显示原始数据
+            deduped_display = translate_dataframe_columns(deduped.head(topn))
+            st.dataframe(deduped_display, use_container_width=True, hide_index=True)
     else:
         st.warning("请先完成评分")
 
@@ -1000,8 +1081,105 @@ with tab4:
         st.write(f"已选择 {top_n} 位候选人：")
         st.dataframe(selected_candidates[display_cols], use_container_width=True)
 
-        interview_time = st.text_input("🕒 面试时间（例：2025-11-15 14:00, Asia/Shanghai）", "2025-11-15 14:00, Asia/Shanghai")
-        organizer_email = st.text_input("📧 面试组织者邮箱", "hr@company.com")
+        # 时区选择（全局设置）
+        timezone = st.selectbox("🌍 时区", ["Asia/Shanghai", "Asia/Beijing", "UTC"], index=0)
+        
+        # 为每位候选人单独设置面试时间
+        st.markdown("### 📅 为每位候选人设置面试时间")
+        st.info("💡 每位候选人可以设置不同的面试时间，避免群面冲突")
+        
+        candidate_interview_times = {}
+        candidate_interview_locations = {}
+        
+        # 默认面试时间和地点
+        default_date = datetime.now().date() + timedelta(days=1)
+        default_time = datetime.strptime("14:00", "%H:%M").time()
+        default_location = "公司会议室（具体地址待确认）"
+        
+        for idx, (_, row) in enumerate(selected_candidates.iterrows()):
+            row_dict = row.to_dict()
+            candidate_name = row_dict.get("name") or row_dict.get("file") or f"候选人{idx+1}"
+            
+            with st.expander(f"📅 {candidate_name} 的面试安排", expanded=(idx == 0)):
+                col_date, col_time = st.columns(2)
+                with col_date:
+                    # 从session_state获取之前设置的时间，如果没有则使用默认值
+                    date_key = f"interview_date_{idx}"
+                    prev_date = st.session_state.get(date_key, default_date)
+                    interview_date = st.date_input(
+                        "面试日期",
+                        value=prev_date,
+                        key=date_key,
+                        label_visibility="visible"
+                    )
+                with col_time:
+                    time_key = f"interview_time_{idx}"
+                    prev_time = st.session_state.get(time_key, default_time)
+                    interview_hour = st.time_input(
+                        "面试时间",
+                        value=prev_time,
+                        key=time_key,
+                        label_visibility="visible"
+                    )
+                
+                # 格式化面试时间字符串
+                interview_datetime = datetime.combine(interview_date, interview_hour)
+                interview_time_str = f"{interview_datetime.strftime('%Y-%m-%d %H:%M')}, {timezone}"
+                candidate_interview_times[idx] = interview_time_str
+                
+                # 面试地点（可以为每个候选人单独设置）
+                location_key = f"interview_location_{idx}"
+                prev_location = st.session_state.get(location_key, default_location if idx == 0 else "")
+                interview_location = st.text_input(
+                    "📍 面试地点",
+                    value=prev_location,
+                    key=location_key,
+                    help="可为每位候选人设置不同的面试地点",
+                    label_visibility="visible"
+                )
+                candidate_interview_locations[idx] = interview_location or default_location
+        
+        # 全局面试地点和时间（如果所有候选人使用相同地点和时间，可以在这里设置）
+        st.markdown("---")
+        st.markdown("### 🌐 统一面试设置（可选）")
+        st.info("💡 如果所有候选人使用相同的时间和地点，可以在这里统一设置，将覆盖上述单独设置")
+        
+        # 是否启用统一面试时间
+        use_unified_time = st.checkbox("✅ 使用统一面试时间", value=False, help="勾选后，所有候选人将使用相同的面试时间")
+        
+        # 统一面试时间（仅在启用时显示）
+        unified_interview_time_str = None
+        if use_unified_time:
+            col_unified_date, col_unified_time = st.columns(2)
+            with col_unified_date:
+                unified_date_key = "unified_interview_date"
+                prev_unified_date = st.session_state.get(unified_date_key, default_date)
+                unified_interview_date = st.date_input(
+                    "📅 统一面试日期",
+                    value=prev_unified_date,
+                    key=unified_date_key,
+                    help="将应用于所有候选人",
+                    label_visibility="visible"
+                )
+            with col_unified_time:
+                unified_time_key = "unified_interview_time"
+                prev_unified_time = st.session_state.get(unified_time_key, default_time)
+                unified_interview_hour = st.time_input(
+                    "⏰ 统一面试时间",
+                    value=prev_unified_time,
+                    key=unified_time_key,
+                    help="将应用于所有候选人",
+                    label_visibility="visible"
+                )
+            
+            # 格式化统一面试时间字符串
+            unified_interview_datetime = datetime.combine(unified_interview_date, unified_interview_hour)
+            unified_interview_time_str = f"{unified_interview_datetime.strftime('%Y-%m-%d %H:%M')}, {timezone}"
+        
+        # 统一面试地点
+        interview_location = st.text_input("📍 统一面试地点（可选，如为空则使用上述单独设置的地点）", value="", help="如果所有候选人使用相同地点，可以在这里统一设置")
+        
+        organizer_email = st.text_input("📧 面试组织者邮箱", value=os.getenv("SMTP_USER", "hr@company.com"))
         
         # 企业微信配置（可选）
         with st.expander("📱 企业微信配置（可选）"):
@@ -1009,6 +1187,13 @@ with tab4:
             organizer_wechat = st.text_input("组织者企业微信ID", "", help="可选，用于生成企业微信添加链接", key="organizer_wechat")
             meeting_link = st.text_input("会议链接（可选）", "", help="如：腾讯会议链接、Zoom链接等", key="meeting_link")
 
+        # 检查是否已有生成的邮件
+        existing_invites = st.session_state.get("invite_results", [])
+        show_existing = False
+        if existing_invites and len(existing_invites) > 0:
+            st.info(f"💡 检测到已有 {len(existing_invites)} 封已生成的邮件，您可以继续编辑或直接发送。如需重新生成，请点击下方按钮。")
+            show_existing = True
+        
         if st.button("🚀 一键生成邀约邮件 + ICS"):
             # 获取企业微信配置（如果未设置，使用默认值）
             organizer_name = st.session_state.get("organizer_name", "HR")
@@ -1022,11 +1207,31 @@ with tab4:
 
             job_title = st.session_state.get("job_name") or "目标岗位"
 
-            for _, row in selected_candidates.iterrows():
+            # 生成默认面试时间作为fallback
+            default_interview_datetime = datetime.combine(default_date, default_time)
+            default_interview_time_str = f"{default_interview_datetime.strftime('%Y-%m-%d %H:%M')}, {timezone}"
+
+            for idx, (_, row) in enumerate(selected_candidates.iterrows()):
                 row_dict = row.to_dict()
-                candidate_name = row_dict.get("file") or row_dict.get("name") or "匿名候选人"
+                # 优先使用name字段（姓名），如果没有则使用file字段（文件名），最后使用默认值
+                candidate_name_raw = row_dict.get("name") or row_dict.get("file") or "匿名候选人"
+                # 添加先生/女士称呼
+                candidate_name = add_name_title(candidate_name_raw, row_dict)
                 candidate_email = row_dict.get("email", "")
                 candidate_score = row_dict.get("总分") or row_dict.get("score_total") or row_dict.get("score", "未知")
+
+                # 获取该候选人的面试时间和地点
+                # 如果启用了统一时间，优先使用统一时间；否则使用候选人单独设置的时间
+                if use_unified_time and unified_interview_time_str:
+                    candidate_interview_time = unified_interview_time_str
+                else:
+                    candidate_interview_time = candidate_interview_times.get(idx, default_interview_time_str)
+                
+                # 如果设置了统一地点，优先使用统一地点；否则使用候选人单独设置的地点
+                if interview_location and interview_location.strip():
+                    candidate_interview_location = interview_location
+                else:
+                    candidate_interview_location = candidate_interview_locations.get(idx, default_location)
 
                 try:
                     candidate_highlight = generate_ai_summary(row_dict)
@@ -1034,11 +1239,15 @@ with tab4:
                     candidate_highlight = f"AI 总结失败：{e}"
 
                 try:
+                    # 生成ICS文件描述
+                    ics_description = f"请准时参加面试。如需调整时间请及时联系HR。\n岗位：{job_title}\n面试地点：{candidate_interview_location or '待确认'}"
                     ics_path = create_ics_file(
-                        title=f"面试邀约 - {candidate_name}",
-                        start_time=interview_time,
+                        title=f"{job_title}岗位面试",
+                        start_time=candidate_interview_time,
                         organizer=organizer_email,
                         attendee=candidate_email or "candidate@example.com",
+                        location=candidate_interview_location or "",
+                        description=ics_description,
                     )
                 except Exception as e:
                     st.warning(f"生成 {candidate_name} 的日历文件失败：{e}")
@@ -1052,8 +1261,15 @@ with tab4:
                         score=candidate_score,
                         ics_path=ics_path or "(附件生成失败)",
                     )
+                    # 在邮件正文中添加面试地点信息
+                    if candidate_interview_location and candidate_interview_location.strip():
+                        location_note = f"\n\n📍 面试地点：{candidate_interview_location}"
+                        email_body = email_body + location_note
                 except Exception as e:
                     email_body = f"AI 邮件生成失败：{e}"
+
+                # 生成邮件主题：关于 {姓名} 应聘 {岗位} 的面试安排通知
+                email_subject = f"关于 {candidate_name} 应聘 {job_title} 的面试安排通知"
 
                 invite_results.append(
                     {
@@ -1061,10 +1277,12 @@ with tab4:
                         "email": candidate_email,
                         "ics": ics_path,
                         "body": email_body,
+                        "subject": email_subject,
                         "highlights": candidate_highlight,
                         "score": candidate_score,
                         "position": job_title,
-                        "interview_time": interview_time,
+                        "interview_time": candidate_interview_time,
+                        "interview_location": candidate_interview_location,
                     }
                 )
 
@@ -1074,6 +1292,83 @@ with tab4:
                 fp.write(json_payload)
 
             st.success("✅ AI 个性化邀约生成完成！")
+            
+            # 保存到session_state，供后续编辑和发送使用
+            st.session_state["invite_results"] = invite_results
+            st.session_state["job_title"] = job_title
+            # 保存每个候选人的面试时间配置（用于后续编辑）
+            st.session_state["candidate_interview_times"] = candidate_interview_times
+            st.session_state["candidate_interview_locations"] = candidate_interview_locations
+        
+        # 显示邮件预览和编辑功能（无论是新生成还是已有邮件）
+        invite_results = st.session_state.get("invite_results", [])
+        if invite_results and len(invite_results) > 0:
+            job_title = st.session_state.get("job_title", "目标岗位")
+            # interview_time 和 interview_location 在已有邮件时从session_state获取，新生成时使用上面的值
+            default_interview_time = f"{datetime.combine(datetime.now().date() + timedelta(days=1), datetime.strptime('14:00', '%H:%M').time()).strftime('%Y-%m-%d %H:%M')}, {timezone}"
+            interview_time = st.session_state.get("interview_time", default_interview_time)
+            interview_location = st.session_state.get("interview_location", "公司会议室（具体地址待确认）")
+            
+            # 邮件预览和编辑功能
+            st.markdown("### 📧 邮件预览与编辑")
+            st.info("💡 在发送前，您可以预览和编辑每封邮件的内容")
+            
+            for idx, invite in enumerate(invite_results):
+                with st.expander(f"📧 {invite.get('name', f'候选人{idx+1}')} - {invite.get('email', '')}", expanded=(idx == 0)):
+                    col_preview1, col_preview2 = st.columns([2, 1])
+                    
+                    with col_preview1:
+                        st.markdown("**邮件主题：**")
+                        subject_key = f"subject_{idx}"
+                        # 智能识别岗位和姓名：优先使用invite中的position和name，如果没有则使用job_title和默认值
+                        position_for_subject = invite.get("position", job_title)
+                        candidate_name_for_subject = invite.get("name", "您")
+                        email_subject = st.text_input(
+                            "主题",
+                            value=invite.get("subject", f"关于 {candidate_name_for_subject} 应聘 {position_for_subject} 的面试安排通知"),
+                            key=subject_key,
+                            label_visibility="collapsed"
+                        )
+                        
+                        st.markdown("**邮件正文：**")
+                        body_key = f"body_{idx}"
+                        edited_body = st.text_area(
+                            "正文",
+                            value=invite.get("body", ""),
+                            height=300,
+                            key=body_key,
+                            label_visibility="collapsed"
+                        )
+                        
+                        # 更新invite_results中的内容
+                        invite_results[idx]["body"] = edited_body
+                        invite_results[idx]["subject"] = email_subject
+                    
+                    with col_preview2:
+                        st.markdown("**邮件信息：**")
+                        st.write(f"📧 **收件人：** {invite.get('email', '未提供')}")
+                        st.write(f"📅 **面试时间：** {invite.get('interview_time', '未设置')}")
+                        st.write(f"📍 **面试地点：** {invite.get('interview_location', '未设置')}")
+                        st.write(f"💼 **岗位：** {invite.get('position', '未设置')}")
+                        st.write(f"⭐ **评分：** {invite.get('score', '未知')}")
+                        
+                        if invite.get("ics"):
+                            st.success("✅ 日历附件已生成")
+                        else:
+                            st.warning("⚠️ 日历附件未生成")
+                        
+                        st.markdown("**亮点摘要：**")
+                        st.caption(invite.get("highlights", "无")[:200])
+            
+            # 更新session_state中的编辑后内容
+            st.session_state["invite_results"] = invite_results
+            
+            # 保存JSON文件
+            json_payload = json.dumps(invite_results, ensure_ascii=False, indent=2)
+            json_path = os.path.join("reports/invites", f"invite_batch_{datetime.now().strftime('%Y%m%d_%H%M')}.json")
+            os.makedirs("reports/invites", exist_ok=True)
+            with open(json_path, "w", encoding="utf-8") as fp:
+                fp.write(json_payload)
             
             # 企业微信集成
             st.markdown("### 📱 企业微信邀约")
@@ -1148,7 +1443,7 @@ with tab4:
                     st.warning(f"CSV生成功能：{str(e)}")
             
             # SMTP邮件发送（可选）
-            with st.expander("📮 通过SMTP直接发送邮件（需要配置）"):
+            with st.expander("📮 通过SMTP直接发送邮件（需要配置）", expanded=True):
                 st.info("💡 需要在 .env 文件中配置以下参数：\n- SMTP_SERVER（如：smtp.exmail.qq.com）\n- SMTP_PORT（默认587）\n- SMTP_USER（邮箱地址）\n- SMTP_PASSWORD（邮箱密码或授权码）")
                 
                 smtp_server = st.text_input("SMTP服务器", os.getenv("SMTP_SERVER", ""), help="如：smtp.exmail.qq.com")
@@ -1156,38 +1451,94 @@ with tab4:
                 smtp_user = st.text_input("SMTP用户名（邮箱）", os.getenv("SMTP_USER", ""))
                 smtp_password = st.text_input("SMTP密码/授权码", type="password", value=os.getenv("SMTP_PASSWORD", ""))
                 
-                if st.button("📤 批量发送邮件"):
+                # 发送前确认
+                if st.button("📤 批量发送邮件", type="primary"):
                     if not smtp_server or not smtp_user or not smtp_password:
                         st.error("❌ 请先配置SMTP参数")
+                    elif not invite_results:
+                        st.error("❌ 没有可发送的邮件，请先生成邀约邮件")
                     else:
                         try:
                             from backend.services.email_integration import send_email_via_smtp
                             
+                            progress_bar = st.progress(0)
+                            status_text = st.empty()
+                            
                             success_count = 0
                             fail_count = 0
+                            send_results = []
                             
-                            for invite in invite_results:
-                                result = send_email_via_smtp(
-                                    to_email=invite.get("email", ""),
-                                    subject=f"面试邀约 - {job_title} - {invite.get('name', '')}",
-                                    body=invite.get("body", ""),
-                                    ics_path=invite.get("ics", ""),
-                                    smtp_server=smtp_server,
-                                    smtp_port=smtp_port,
-                                    smtp_user=smtp_user,
-                                    smtp_password=smtp_password,
-                                    from_email=smtp_user
-                                )
+                            total = len(invite_results)
+                            for idx, invite in enumerate(invite_results):
+                                candidate_name = invite.get("name", f"候选人{idx+1}")
+                                candidate_email = invite.get("email", "")
+                                
+                                # 更新进度
+                                progress = (idx + 1) / total
+                                progress_bar.progress(progress)
+                                status_text.text(f"正在发送 ({idx + 1}/{total}): {candidate_name} ({candidate_email})")
+                                
+                                # 获取编辑后的邮件内容，智能识别岗位和姓名
+                                position_for_subject = invite.get("position", job_title)
+                                candidate_name_for_subject = invite.get("name", "您")
+                                email_subject = invite.get("subject", f"关于 {candidate_name_for_subject} 应聘 {position_for_subject} 的面试安排通知")
+                                email_body = invite.get("body", "")
+                                
+                                if not candidate_email or not candidate_email.strip():
+                                    result = {
+                                        "success": False,
+                                        "message": "收件人邮箱为空"
+                                    }
+                                else:
+                                    result = send_email_via_smtp(
+                                        to_email=candidate_email,
+                                        subject=email_subject,
+                                        body=email_body,
+                                        ics_path=invite.get("ics", ""),
+                                        smtp_server=smtp_server,
+                                        smtp_port=smtp_port,
+                                        smtp_user=smtp_user,
+                                        smtp_password=smtp_password,
+                                        from_email=smtp_user
+                                    )
+                                
+                                send_results.append({
+                                    "name": candidate_name,
+                                    "email": candidate_email,
+                                    "success": result.get("success", False),
+                                    "message": result.get("message", "")
+                                })
                                 
                                 if result.get("success"):
                                     success_count += 1
                                 else:
                                     fail_count += 1
-                                    st.warning(f"❌ {invite.get('name', '')} 发送失败：{result.get('message', '')}")
                             
-                            st.success(f"✅ 邮件发送完成：成功 {success_count} 封，失败 {fail_count} 封")
+                            progress_bar.empty()
+                            status_text.empty()
+                            
+                            # 显示发送结果
+                            st.markdown("### 📊 发送结果")
+                            if success_count > 0:
+                                st.success(f"✅ 成功发送 {success_count} 封邮件")
+                            if fail_count > 0:
+                                st.error(f"❌ 发送失败 {fail_count} 封邮件")
+                            
+                            # 显示详细结果
+                            with st.expander("📋 详细发送结果", expanded=(fail_count > 0)):
+                                for result in send_results:
+                                    if result["success"]:
+                                        st.success(f"✅ {result['name']} ({result['email']}) - 发送成功")
+                                    else:
+                                        st.error(f"❌ {result['name']} ({result['email']}) - {result['message']}")
+                            
+                            # 保存发送结果
+                            st.session_state["send_results"] = send_results
+                            
                         except Exception as e:
                             st.error(f"❌ 发送失败：{str(e)}")
+                            import traceback
+                            st.code(traceback.format_exc())
             
             st.download_button(
                 "📥 下载邀约结果（JSON）",

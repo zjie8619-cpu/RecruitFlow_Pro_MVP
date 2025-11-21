@@ -4,54 +4,61 @@ from typing import Dict
 # 字段映射字典:英文 -> 中文
 FIELD_MAPPING: Dict[str, str] = {
     # 候选人基本信息
-#     "candidate_id": "候选人ID",
-#     "file": "文件名",
-#     "name": "姓名",
-#     "email": "邮箱",
-#     "phone": "电话",
-#     "text_len": "文本长度",
-#     "resume_text": "简历文本",
+    "candidate_id": "候选人ID",
+    "file": "文件名",
+    "name": "姓名",
+    "email": "邮箱",
+    "phone": "电话",
+    "text_len": "文本长度",
+    "resume_text": "简历文本",
+    "resume_mini": "AI短版简历",
 
     # 评分相关
-#     "score_total": "总分",
-#     "总分": "总分",
-#     "skill_fit": "技能匹配度",
-#     "技能匹配度": "技能匹配度",
-#     "exp_relevance": "经验相关性",
-#     "经验相关性": "经验相关性",
-#     "growth": "成长潜力",
-#     "成长潜力": "成长潜力",
-#     "stability": "稳定性",
-#     "稳定性": "稳定性",
-#     "score": "总分",
-#     "match_score": "匹配分数",
-#     "AI_score": "AI评分",
+    "score_total": "总分",
+    "总分": "总分",
+    "skill_fit": "技能匹配度",
+    "技能匹配度": "技能匹配度",
+    "exp_relevance": "经验相关性",
+    "经验相关性": "经验相关性",
+    "growth": "成长潜力",
+    "成长潜力": "成长潜力",
+    "stability": "稳定性",
+    "稳定性": "稳定性",
+    "score": "总分",
+    "match_score": "匹配分数",
+    "AI_score": "AI评分",
 
     # 评价相关
-#     "short_eval": "AI评价",
-#     "evidence": "证据",
-#     "证据": "证据",
-#     "简评": "简评",
-#     "confidence": "置信度",
+    "short_eval": "AI评价",
+    "evidence": "证据",
+    "证据": "证据",
+    "简评": "简评",
+    "confidence": "置信度",
+    "score_explain": "得分说明",
+    "row_display": "界面摘要",
+    "highlights": "亮点标签",
+    "short_eval_struct": "AI结构化评价",
 
     # 其他字段
-#     "rank": "排名",
-#     "created_at": "创建时间",
-#     "updated_at": "更新时间",
-#     "job": "岗位",
-#     "jd_long": "长版JD",
-#     "jd_short": "短版JD",
-#     "resume_id": "简历ID",
+    "rank": "排名",
+    "created_at": "创建时间",
+    "updated_at": "更新时间",
+    "job": "岗位",
+    "jd_long": "长版JD",
+    "jd_short": "短版JD",
+    "resume_id": "简历ID",
     "id": "ID",
-#     "edu": "学历",
-#     "companies": "公司",
-#     "years": "工作年限",
-#     "skills": "技能",
-#     "projects": "项目经验",
-#     "text_raw": "原始文本",
-#     "source": "来源",
-#     "blocked_by_threshold": "阈值拦截",
-#     "evidence_json": "证据链JSON",
+    "edu": "学历",
+    "companies": "公司",
+    "years": "工作年限",
+    "skills": "技能",
+    "projects": "项目经验",
+    "text_raw": "原始文本",
+    "source": "来源",
+    "blocked_by_threshold": "阈值拦截",
+    "evidence_json": "证据链JSON",
+    "ability_model": "岗位能力模型",
+    "reasoning_chain": "推理链证据",
 }
 
 def translate_field(field_name: str) -> str:
@@ -60,7 +67,7 @@ def translate_field(field_name: str) -> str:
 
 def translate_dataframe_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
-#     翻译 DataFrame 的列名
+    翻译 DataFrame 的列名（英文 -> 中文）
     """
     if df is None or df.empty:
         return df

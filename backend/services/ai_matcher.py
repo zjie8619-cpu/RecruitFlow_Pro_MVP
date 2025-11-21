@@ -278,6 +278,98 @@ def _format_reasoning_text(evidence_struct: Dict[str, Any]) -> str:
     return "\n".join(lines).strip()
 
 
+def _single_line(text: str, limit: int | None = None) -> str:
+    if not text:
+        return ""
+    cleaned = str(text).replace("\r", " ").replace("\n", "；")
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = (
+        cleaned.replace(",", "，")
+        .replace(";", "；")
+        .replace("|", "｜")
+        .strip(" ；")
+    )
+    if limit and len(cleaned) > limit:
+        return cleaned[:limit].rstrip("； ，") + "..."
+    return cleaned
+
+
+def _format_highlights_for_csv(highlights: List[str], strengths: List[str]) -> str:
+    tags: List[str] = [tag.strip() for tag in highlights or [] if tag and tag.strip()]
+    if len(tags) < 2:
+        for strength in strengths or []:
+            strength = (strength or "").strip()
+            if not strength:
+                continue
+            tags.append(strength[:8])
+            if len(tags) >= 3:
+                break
+    if not tags:
+        tags = ["未提供相关信息"]
+    tags = [ _single_line(tag, 12) for tag in tags[:3] ]
+    return "｜".join(tags)
+
+
+def _format_resume_summary(resume_mini: str, resume_text: str) -> str:
+    source = resume_mini or resume_text or "未提供相关信息"
+    return _single_line(source, 130) or "未提供相关信息"
+
+
+def _format_csv_evidence(short_eval_struct: Dict[str, Any], evidence_struct: Dict[str, Any]) -> str:
+    def _build_strengths() -> str:
+        chain = evidence_struct.get("strengths_reasoning_chain") if isinstance(evidence_struct, dict) else None
+        items = []
+        if isinstance(chain, list):
+            for idx, item in enumerate(chain, 1):
+                if not isinstance(item, dict):
+                    continue
+                conclusion = _single_line(item.get("conclusion", ""), 16) or "待补充"
+                actions = _single_line(item.get("detected_actions", ""), 18) or "未提供相关信息"
+                evidence = _single_line(item.get("resume_evidence", ""), 28) or "未提供相关信息"
+                reasoning = _single_line(item.get("ai_reasoning", ""), 24) or "未提供相关信息"
+                items.append(
+                    f"{idx}. {conclusion}｜动作:{actions}｜证据:{evidence}｜推断:{reasoning}"
+                )
+        if not items:
+            return "暂无可验证优势"
+        return "；".join(items)
+
+    def _build_weaknesses() -> str:
+        chain = evidence_struct.get("weaknesses_reasoning_chain") if isinstance(evidence_struct, dict) else None
+        items = []
+        if isinstance(chain, list):
+            for idx, item in enumerate(chain, 1):
+                if not isinstance(item, dict):
+                    continue
+                conclusion = _single_line(item.get("conclusion", ""), 16) or "待补充"
+                gap = _single_line(item.get("resume_gap", ""), 18) or "未提供相关信息"
+                compare = _single_line(item.get("compare_to_jd", ""), 24) or "未提供相关信息"
+                risk = _single_line(item.get("ai_reasoning", ""), 24) or "未提供相关信息"
+                items.append(
+                    f"{idx}. {conclusion}｜缺口:{gap}｜JD:{compare}｜风险:{risk}"
+                )
+        if not items:
+            return "暂无可验证劣势"
+        return "；".join(items)
+
+    match_level = ""
+    match_reason = ""
+    if isinstance(short_eval_struct, dict):
+        match_level = _single_line(short_eval_struct.get("match_level", ""), 6) or "无法评估"
+        match_reason = _single_line(short_eval_struct.get("match_reason", ""), 40) or "未提供匹配原因"
+    else:
+        match_level = "无法评估"
+        match_reason = "未提供匹配原因"
+
+    strengths_part = _build_strengths()
+    weaknesses_part = _build_weaknesses()
+    return (
+        f"【优势】{strengths_part}"
+        f"【劣势】{weaknesses_part}"
+        f"【匹配度】{match_level}：{match_reason}"
+    )
+
+
 def _heuristic_score_from_text(
     jd_text: str, resume_text: str, job_title: str = ""
 ) -> Dict[str, Any]:
@@ -793,6 +885,9 @@ def ai_match_resumes_df(jd_text: str, resumes_df: pd.DataFrame, job_title: str =
             result = _heuristic_score_from_text(jd_text, resume_text, effective_job_label)
 
         # 构建行数据
+        short_eval_struct = result.get("short_eval_struct") or {}
+        evidence_struct = result.get("reasoning_chain") or {}
+
         row_data = {
             "candidate_id": resumes_df.loc[idx, "candidate_id"] if "candidate_id" in resumes_df.columns else None,
             "file": file_name,
@@ -801,15 +896,16 @@ def ai_match_resumes_df(jd_text: str, resumes_df: pd.DataFrame, job_title: str =
             "phone": resumes_df.loc[idx, "phone"] if "phone" in resumes_df.columns else "",
             "resume_text": resume_text,
             "resume_mini": result.get("resume_mini", ""),
+            "job_title": effective_job_label or job_title or "",
             "总分": result.get("总分", 0),
             "技能匹配度": result.get("维度得分", {}).get("技能匹配度", 0),
             "经验相关性": result.get("维度得分", {}).get("经验相关性", 0),
             "成长潜力": result.get("维度得分", {}).get("成长潜力", 0),
             "稳定性": result.get("维度得分", {}).get("稳定性", 0),
             "short_eval": result.get("short_eval") or result.get("简评", ""),
-            "short_eval_struct": json.dumps(result.get("short_eval_struct", {}), ensure_ascii=False),
+            "short_eval_struct": json.dumps(short_eval_struct, ensure_ascii=False),
             "ability_model": json.dumps(result.get("ability_model", {}), ensure_ascii=False),
-            "reasoning_chain": json.dumps(result.get("reasoning_chain", {}), ensure_ascii=False),
+            "reasoning_chain": json.dumps(evidence_struct, ensure_ascii=False),
             "证据": result.get("证据") if isinstance(result.get("证据"), str) else (
                 "\n".join(result.get("证据") or []) if isinstance(result.get("证据"), list) else "【优势证据】\n1. 优势 → 简历未体现相关内容\n\n【劣势证据】\n1. 劣势 → 简历未体现相关内容"
             ),
@@ -841,8 +937,15 @@ def ai_match_resumes_df(jd_text: str, resumes_df: pd.DataFrame, job_title: str =
             else:
                 highlight_list = []
 
+        csv_highlights = _format_highlights_for_csv(highlight_list, short_eval_struct.get("core_strengths") or [])
+        csv_resume_summary = _format_resume_summary(row_data["resume_mini"], resume_text)
+        csv_evidence = _format_csv_evidence(short_eval_struct, evidence_struct)
+
         row_data["row_display"] = row_display
         row_data["highlights"] = "｜".join([h for h in highlight_list if h])
+        row_data["csv_highlights"] = csv_highlights
+        row_data["csv_resume_summary"] = csv_resume_summary
+        row_data["csv_evidence"] = csv_evidence
         
         rows.append(row_data)
 
