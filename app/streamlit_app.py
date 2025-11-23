@@ -2,11 +2,19 @@ import json
 import os
 import re
 import time
+import uuid
 
 import pandas as pd
 import streamlit as st
 from datetime import datetime, timedelta
 from pathlib import Path
+# 可选导入 plotly，如果不存在则使用替代方案
+try:
+    import plotly.graph_objects as go
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
+    go = None
 from backend.storage.db import init_db, get_db
 from backend.services.pipeline import RecruitPipeline
 from backend.services.reporting import export_round_report
@@ -23,6 +31,7 @@ from backend.services.resume_parser import parse_uploaded_files_to_df
 if 'backend.services.ai_matcher' in sys.modules:
     importlib.reload(sys.modules['backend.services.ai_matcher'])
 from backend.services.ai_matcher import ai_match_resumes_df
+from backend.services.ai_matcher_ultra import ai_match_resumes_df_ultra
 from backend.services.ai_core import generate_ai_summary, generate_ai_email
 # 🔄 强制重新加载日历工具模块，确保使用最新版本
 if 'backend.services.calendar_utils' in sys.modules:
@@ -99,6 +108,100 @@ SHOW_DETAIL_SECTIONS = True   # 是否显示详细部分（长版JD / 岗位能�
 # =====================================
 
 st.set_page_config(page_title="RecruitFlow | 一键招聘流水线", layout="wide")
+
+# ==================== UI 优化样式 ====================
+st.markdown("""
+<style>
+    /* 简历摘要3行限制 */
+    .resume-mini {
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        line-height: 1.5;
+        max-height: 4.5em;
+    }
+    
+    /* 亮点标签样式 */
+    .highlight-tag {
+        display: inline-block;
+        padding: 4px 12px;
+        margin: 4px 4px 4px 0;
+        border-radius: 16px;
+        font-size: 0.85em;
+        font-weight: 500;
+        white-space: nowrap;
+    }
+    
+    .highlight-tag-green {
+        background-color: #d4edda;
+        color: #155724;
+        border: 1px solid #c3e6cb;
+    }
+    
+    .highlight-tag-yellow {
+        background-color: #fff3cd;
+        color: #856404;
+        border: 1px solid #ffeaa7;
+    }
+    
+    .highlight-tag-gray {
+        background-color: #e9ecef;
+        color: #495057;
+        border: 1px solid #dee2e6;
+    }
+    
+    /* 概览卡片样式 */
+    .candidate-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 20px;
+        border-radius: 12px;
+        color: white;
+        margin-bottom: 20px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    
+    .candidate-card h3 {
+        color: white;
+        margin: 0 0 10px 0;
+        font-size: 1.5em;
+    }
+    
+    .candidate-card .score {
+        font-size: 2em;
+        font-weight: bold;
+        margin: 10px 0;
+    }
+    
+    /* 推理链卡片样式 */
+    .reasoning-item {
+        background: #f8f9fa;
+        padding: 15px;
+        margin: 10px 0;
+        border-radius: 8px;
+        border-left: 4px solid #667eea;
+    }
+    
+    .reasoning-item strong {
+        color: #495057;
+    }
+    
+    /* 响应式布局 */
+    @media (max-width: 768px) {
+        .candidate-card {
+            padding: 15px;
+        }
+        .candidate-card h3 {
+            font-size: 1.2em;
+        }
+        .candidate-card .score {
+            font-size: 1.5em;
+        }
+    }
+</style>
+""", unsafe_allow_html=True)
+
 st.title("RecruitFlow — 一键招聘流水线（教育机构版）")
 
 def sanitize_single_line(text, default="未提供相关信息", limit=None):
@@ -199,6 +302,98 @@ def _format_evidence_field(row_dict):
 
     evidence_text = f"【优势】{_format_strengths()}【劣势】{_format_weaknesses()}【匹配度】{match_text}"
     return _clean_single_line(evidence_text, default="未提供")
+
+
+# ==================== UI 优化辅助函数 ====================
+def _get_highlight_color(tag: str) -> str:
+    """根据标签内容返回颜色类别（绿色/黄色/灰色）"""
+    tag_lower = tag.lower()
+    # 深绿色：强相关能力
+    if any(keyword in tag_lower for keyword in ["沟通", "学习", "稳定", "班主任", "教学", "管理", "领导", "团队"]):
+        return "green"
+    # 黄色：通用优势
+    elif any(keyword in tag_lower for keyword in ["客服", "电话", "活动运营", "销售", "市场", "推广"]):
+        return "yellow"
+    # 灰色：补充信息
+    else:
+        return "gray"
+
+
+def _generate_summary_text(strengths_chain: list, weaknesses_chain: list) -> str:
+    """前端自动生成一句话总结"""
+    strengths_count = len(strengths_chain) if strengths_chain else 0
+    weaknesses_count = len(weaknesses_chain) if weaknesses_chain else 0
+    
+    if strengths_count > weaknesses_count:
+        # 提取优势关键词
+        strength_keywords = []
+        for item in strengths_chain[:2]:
+            if isinstance(item, dict):
+                conclusion = item.get("conclusion", "")
+                if conclusion:
+                    strength_keywords.append(conclusion)
+        keywords_text = "、".join(strength_keywords[:2]) if strength_keywords else "多个方面"
+        return f"✅ **推荐理由**：该候选人在 {keywords_text} 方面较为突出，整体适配度良好。"
+    elif weaknesses_count > 0:
+        # 提取劣势关键词
+        weakness_keywords = []
+        for item in weaknesses_chain[:2]:
+            if isinstance(item, dict):
+                conclusion = item.get("conclusion", "")
+                if conclusion:
+                    weakness_keywords.append(conclusion)
+        keywords_text = "、".join(weakness_keywords[:2]) if weakness_keywords else "某些方面"
+        return f"⚠️ **风险提示**：该候选人在 {keywords_text} 方面存在不足，建议结合岗位重点评估。"
+    else:
+        return "📋 **评估中**：信息不足，建议进一步了解候选人情况。"
+
+
+def _create_radar_chart(scores: dict):
+    """创建评分维度雷达图"""
+    # 使用文件顶部已导入的 plotly.graph_objects
+    # 如果顶部导入失败，这里会抛出 NameError，需要检查 PLOTLY_AVAILABLE
+    if not PLOTLY_AVAILABLE or go is None:
+        raise ImportError("Plotly 未安装或导入失败。请运行: pip install plotly kaleido")
+    
+    categories = ["技能匹配度", "经验相关性", "成长潜力", "稳定性"]
+    values = [
+        float(scores.get("技能匹配度", 0)),
+        float(scores.get("经验相关性", 0)),
+        float(scores.get("成长潜力", 0)),
+        float(scores.get("稳定性", 0)),
+    ]
+    
+    # 添加第一个值到末尾以闭合图形
+    values_closed = values + [values[0]]
+    categories_closed = categories + [categories[0]]
+    
+    fig = go.Figure()
+    fig.add_trace(go.Scatterpolar(
+        r=values_closed,
+        theta=categories_closed,
+        fill='toself',
+        name='评分',
+        line=dict(color='#1f77b4'),
+        fillcolor='rgba(31, 119, 180, 0.25)'
+    ))
+    
+    fig.update_layout(
+        polar=dict(
+            radialaxis=dict(
+                visible=True,
+                range=[0, 100],
+                tickfont=dict(size=10)
+            ),
+            angularaxis=dict(
+                tickfont=dict(size=11)
+            )
+        ),
+        showlegend=False,
+        height=350,
+        margin=dict(l=20, r=20, t=20, b=20)
+    )
+    
+    return fig
 
 
 def _build_export_dataframe(result_df, job_title):
@@ -804,8 +999,14 @@ with tab2:
                 else:
                     # 获取岗位名称，用于岗位级清洗逻辑
                     job_title = st.session_state.get("job_name", "")
-                    with st.spinner("AI 正在智能分析匹配度，请稍候…"):
-                        scored_df = ai_match_resumes_df(jd_text, resumes_df, job_title)
+                    with st.spinner("AI 正在智能分析匹配度（Ultra引擎），请稍候…"):
+                        # 优先使用Ultra版评分引擎
+                        try:
+                            scored_df = ai_match_resumes_df_ultra(jd_text, resumes_df, job_title)
+                        except Exception as e:
+                            st.warning(f"Ultra引擎失败，回退到标准版本: {str(e)[:100]}")
+                            scored_df = ai_match_resumes_df(jd_text, resumes_df, job_title)
+                    # 确保所有必需字段存在（优先使用Ultra字段，兼容旧字段）
                     score_columns = [
                         "candidate_id",
                         "name",
@@ -830,6 +1031,59 @@ with tab2:
                             else:
                                 scored_df[col] = ""
                     
+                    # 确保Ultra字段映射到兼容字段（用于列表页显示）
+                    # 如果兼容字段为空，从Ultra字段填充
+                    if "short_eval" in scored_df.columns:
+                        mask = scored_df["short_eval"].isna() | (scored_df["short_eval"] == "")
+                        scored_df.loc[mask, "short_eval"] = scored_df.loc[mask, "ai_review"].fillna("")
+                    
+                    if "highlights" in scored_df.columns:
+                        mask = scored_df["highlights"].isna() | (scored_df["highlights"] == "")
+                        # 从highlight_tags列表转为字符串
+                        def format_highlights(row):
+                            highlight_tags = row.get("highlight_tags")
+                            # 安全检查：处理各种数据类型（避免空数组的歧义）
+                            try:
+                                # 如果是列表且不为空
+                                if isinstance(highlight_tags, list) and len(highlight_tags) > 0:
+                                    tags = [str(tag) for tag in highlight_tags if tag]
+                                    if tags:
+                                        return " | ".join(tags)
+                                # 如果是numpy数组或其他可迭代对象
+                                elif highlight_tags is not None and hasattr(highlight_tags, '__iter__') and not isinstance(highlight_tags, str):
+                                    try:
+                                        # 尝试转换为列表
+                                        tags_list = list(highlight_tags)
+                                        if len(tags_list) > 0:
+                                            tags = [str(tag) for tag in tags_list if tag]
+                                            if tags:
+                                                return " | ".join(tags)
+                                    except (TypeError, ValueError):
+                                        pass
+                                # 如果是字符串
+                                elif isinstance(highlight_tags, str) and highlight_tags.strip():
+                                    return highlight_tags
+                            except Exception:
+                                pass
+                            
+                            # 回退到highlights字段
+                            highlights_val = row.get("highlights", "")
+                            if isinstance(highlights_val, str) and highlights_val.strip():
+                                return highlights_val
+                            elif isinstance(highlights_val, list) and len(highlights_val) > 0:
+                                tags = [str(tag) for tag in highlights_val if tag]
+                                return " | ".join(tags) if tags else ""
+                            return ""
+                        scored_df.loc[mask, "highlights"] = scored_df.loc[mask].apply(format_highlights, axis=1)
+                    
+                    if "resume_mini" in scored_df.columns:
+                        mask = scored_df["resume_mini"].isna() | (scored_df["resume_mini"] == "")
+                        scored_df.loc[mask, "resume_mini"] = scored_df.loc[mask, "ai_resume_summary"].fillna("")
+                    
+                    if "证据" in scored_df.columns:
+                        mask = scored_df["证据"].isna() | (scored_df["证据"] == "")
+                        scored_df.loc[mask, "证据"] = scored_df.loc[mask, "evidence_text"].fillna("")
+                    
                     result_df = scored_df
                     display_columns = [
                         "candidate_id",
@@ -853,7 +1107,7 @@ with tab2:
                                 lambda x: (x[:80] + "…") if isinstance(x, str) and len(x) > 80 else x
                             )
                         display_df = translate_dataframe_columns(display_df)
-                        st.dataframe(
+                    st.dataframe(
                             display_df,
                             use_container_width=True,
                             hide_index=True,
@@ -862,72 +1116,428 @@ with tab2:
                     export_df = _build_export_dataframe(result_df, export_job_title)
 
                     st.markdown("### 候选人洞察详情")
-                    for _, row in result_df.iterrows():
+                    # 按总分排序（高分在前）
+                    result_df_sorted = result_df.sort_values(by="总分", ascending=False).reset_index(drop=True)
+                    for _, row in result_df_sorted.iterrows():
+                        candidate_name = row.get('name', '匿名候选人')
                         score_label = row.get("总分")
-                        title = f"{row.get('name','匿名候选人')}｜总分 {score_label if score_label is not None else '—'}"
-                        with st.expander(title):
-                            raw_highlights = row.get("highlights", "")
-                            if isinstance(raw_highlights, str):
-                                highlights_raw = [tag.strip() for tag in re.split(r"[｜|，,、\s]+", raw_highlights) if tag.strip()]
-                            elif isinstance(raw_highlights, list):
-                                highlights_raw = raw_highlights
+                        score_value = float(score_label) if score_label is not None else 0
+                        
+                        # ========== Accordion 标题：显示姓名和总分 ==========
+                        expander_title = f"👤 {candidate_name} ｜ 总分：{score_value:.1f}"
+                        
+                        # ========== 用 st.expander 包裹所有内容，默认折叠 ==========
+                        with st.expander(expander_title, expanded=False):
+                            # ========== 1. 顶部概览卡片 ==========
+                            st.markdown(f"""
+                            <div class="candidate-card">
+                                <h3>{candidate_name}</h3>
+                                <div class="score">总分：{score_value:.1f}</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                            # ========== Ultra字段接入：亮点标签 ==========
+                            # 优先使用Ultra字段 highlight_tags（列表格式）
+                            highlight_tags_ultra = row.get("highlight_tags", [])
+                            
+                            # 调试：检查字段类型和内容
+                            if "highlight_tags" in row:
+                                print(f"[DEBUG] highlight_tags类型: {type(highlight_tags_ultra)}, 值: {highlight_tags_ultra}")
+                            
+                            if highlight_tags_ultra and isinstance(highlight_tags_ultra, list) and len(highlight_tags_ultra) > 0:
+                                # Ultra字段：直接使用列表
+                                highlights_raw = [str(tag).strip() for tag in highlight_tags_ultra if tag and str(tag).strip()]
                             else:
-                                highlights_raw = []
+                                # 回退：从highlights字符串解析
+                                highlights_str = row.get("highlights", "")
+                                if isinstance(highlights_str, str) and highlights_str.strip():
+                                    highlights_raw = [tag.strip() for tag in re.split(r"[｜|，,、\s]+", highlights_str) if tag.strip()]
+                                elif isinstance(highlights_str, list):
+                                    highlights_raw = [str(tag).strip() for tag in highlights_str if tag and str(tag).strip()]
+                                else:
+                                    highlights_raw = []
+                            
+                            # 调试：输出最终结果
+                            if not highlights_raw:
+                                print(f"[DEBUG] 亮点标签为空，row中的字段: {list(row.keys())}")
+                                print(f"[DEBUG] highlight_tags={row.get('highlight_tags')}, highlights={row.get('highlights')}")
+                            
+                            # 生成亮点标签HTML（圆角标签样式）
                             if highlights_raw:
-                                st.markdown(
-                                    "**亮点标签**：" + " ".join(f"`{tag}`" for tag in highlights_raw if tag)
-                                )
+                                st.markdown("**🏷️ 亮点标签**")
+                                highlight_html = '<div style="margin: 10px 0; display: flex; flex-wrap: wrap; gap: 8px;">'
+                                for tag in highlights_raw:
+                                    color_class = _get_highlight_color(tag)
+                                    highlight_html += f'<span class="highlight-tag highlight-tag-{color_class}" style="display: inline-block; padding: 6px 12px; margin: 0; border-radius: 16px; font-size: 0.9em; font-weight: 500; color: white; background-color: {"#28a745" if color_class == "green" else "#ffc107" if color_class == "yellow" else "#6c757d"};">{tag}</span>'
+                                highlight_html += '</div>'
+                                st.markdown(highlight_html, unsafe_allow_html=True)
                             else:
-                                st.markdown("**亮点标签**：暂无")
-
-                            resume_mini = row.get("resume_mini", "")
-                            st.markdown("**短版简历**")
-                            st.write(resume_mini if resume_mini else "暂无短版简历")
-
-                            st.markdown("**AI 推理链**")
-                            reasoning_raw = row.get("reasoning_chain") or {}
-                            try:
-                                reasoning_obj = (
-                                    json.loads(reasoning_raw)
-                                    if isinstance(reasoning_raw, str)
-                                    else reasoning_raw
-                                )
-                            except Exception:
-                                reasoning_obj = {}
-                            def render_chain(title: str, chain: list, fields: list):
-                                st.markdown(f"##### {title}")
-                                if not chain:
-                                    st.caption("暂无相关记录")
-                                    return
-                                for idx, item in enumerate(chain, 1):
-                                    if not isinstance(item, dict):
-                                        continue
-                                    st.markdown(f"**{idx}. {item.get('conclusion', '无结论')}**")
-                                    for label, key in fields:
-                                        value = str(item.get(key, "")).strip()
-                                        if value:
-                                            st.markdown(f"- {label}：{value}")
-                                    st.markdown("---")
-                            strengths_chain = reasoning_obj.get("strengths_reasoning_chain") or []
-                            weaknesses_chain = reasoning_obj.get("weaknesses_reasoning_chain") or []
-                            render_chain(
-                                "优势推理链",
-                                strengths_chain,
-                                [
-                                    ("detected_actions", "detected_actions"),
-                                    ("resume_evidence", "resume_evidence"),
-                                    ("ai_reasoning", "ai_reasoning"),
-                                ],
-                            )
-                            render_chain(
-                                "劣势推理链",
-                                weaknesses_chain,
-                                [
-                                    ("resume_gap", "resume_gap"),
-                                    ("compare_to_jd", "compare_to_jd"),
-                                    ("ai_reasoning", "ai_reasoning"),
-                                ],
-                            )
+                                st.markdown("**🏷️ 亮点标签**")
+                                st.caption("暂无亮点标签")
+                            
+                            # ========== Ultra字段接入：简历摘要（三行结构化）==========
+                            # 优先使用Ultra字段 ai_resume_summary 或 summary_short
+                            ai_resume_summary = row.get("ai_resume_summary", "")
+                            summary_short = row.get("summary_short", "")
+                            
+                            # 优先使用 ai_resume_summary（Ultra格式）
+                            resume_summary_text = ai_resume_summary or summary_short
+                            
+                            if resume_summary_text:
+                                st.markdown("**📄 简历摘要**")
+                                # 如果是三行结构化格式（包含换行符），按行显示
+                                if '\n' in resume_summary_text:
+                                    summary_lines = [line.strip() for line in resume_summary_text.split('\n') if line.strip()]
+                                    summary_html = '<div class="resume-mini" style="line-height: 1.8;">'
+                                    for i, line in enumerate(summary_lines[:3], 1):
+                                        summary_html += f'<div style="margin-bottom: 8px;">{i}. {line}</div>'
+                                    summary_html += '</div>'
+                                    st.markdown(summary_html, unsafe_allow_html=True)
+                                else:
+                                    # 普通文本格式
+                                    st.markdown(f'<div class="resume-mini">{resume_summary_text}</div>', unsafe_allow_html=True)
+                            else:
+                                # 回退到兼容字段
+                                resume_mini = row.get("resume_mini", "")
+                                if resume_mini:
+                                    st.markdown("**📄 简历摘要**")
+                                    st.markdown(f'<div class="resume-mini">{resume_mini}</div>', unsafe_allow_html=True)
+                                else:
+                                    st.markdown("**📄 简历摘要**")
+                                    st.caption("暂无短版简历")
+                            
+                            # ========== Ultra字段接入：AI评价（三段式格式）==========
+                            # 优先使用Ultra字段 ai_review，其次 ai_evaluation
+                            ai_review = row.get("ai_review", "")
+                            ai_evaluation = row.get("ai_evaluation", "")
+                            
+                            # 调试：检查字段
+                            if not ai_review and not ai_evaluation:
+                                print(f"[DEBUG] AI评价为空，row中的字段: {list(row.keys())}")
+                                print(f"[DEBUG] ai_review={ai_review}, ai_evaluation={ai_evaluation}, short_eval={row.get('short_eval')}")
+                            
+                            # 优先使用 ai_review（Ultra格式）
+                            ai_review_text = ai_review or ai_evaluation
+                            
+                            if ai_review_text:
+                                st.markdown("**🤖 AI 评价**")
+                                # 解析三段式结构
+                                evidence_match = re.search(r'【证据】\s*(.*?)(?=【推理】|【结论】|$)', ai_review_text, re.DOTALL)
+                                reasoning_match = re.search(r'【推理】\s*(.*?)(?=【结论】|$)', ai_review_text, re.DOTALL)
+                                conclusion_match = re.search(r'【结论】\s*(.*?)$', ai_review_text, re.DOTALL)
+                                
+                                if evidence_match or reasoning_match or conclusion_match:
+                                    # 三段式格式化显示
+                                    eval_html = '<div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; border-left: 4px solid #007bff; line-height: 1.8;">'
+                                    if evidence_match:
+                                        evidence_text = evidence_match.group(1).strip()
+                                        eval_html += f'<div style="margin-bottom: 12px;"><strong style="color: #007bff;">【证据】</strong><div style="margin-top: 6px; padding-left: 12px;">{evidence_text}</div></div>'
+                                    if reasoning_match:
+                                        reasoning_text = reasoning_match.group(1).strip()
+                                        eval_html += f'<div style="margin-bottom: 12px;"><strong style="color: #28a745;">【推理】</strong><div style="margin-top: 6px; padding-left: 12px;">{reasoning_text}</div></div>'
+                                    if conclusion_match:
+                                        conclusion_text = conclusion_match.group(1).strip()
+                                        eval_html += f'<div><strong style="color: #dc3545;">【结论】</strong><div style="margin-top: 6px; padding-left: 12px;">{conclusion_text}</div></div>'
+                                    eval_html += '</div>'
+                                    st.markdown(eval_html, unsafe_allow_html=True)
+                                else:
+                                    # 普通格式显示
+                                    st.markdown(f'<div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; border-left: 4px solid #007bff; line-height: 1.6; white-space: pre-wrap;">{ai_review_text}</div>', unsafe_allow_html=True)
+                            else:
+                                st.markdown("**🤖 AI 评价**")
+                                st.caption("暂无AI评价")
+                            
+                            st.markdown("---")
+                            
+                            # ========== 2. 从Ultra evidence_chains生成优势/劣势推理链 ==========
+                            evidence_chains_ultra = row.get("evidence_chains", {})
+                            
+                            # 生成优势推理链（从evidence_chains中挑选最强的2条）
+                            strengths_chain = []
+                            if evidence_chains_ultra and isinstance(evidence_chains_ultra, dict):
+                                # 优先从技能匹配度和经验相关性中提取
+                                skill_evidences = evidence_chains_ultra.get("技能匹配度", [])
+                                exp_evidences = evidence_chains_ultra.get("经验相关性", [])
+                                
+                                # 确保是列表格式
+                                if not isinstance(skill_evidences, list):
+                                    skill_evidences = []
+                                if not isinstance(exp_evidences, list):
+                                    exp_evidences = []
+                                
+                                for ev in (skill_evidences + exp_evidences)[:2]:
+                                    if isinstance(ev, dict):
+                                        strengths_chain.append({
+                                            "action": ev.get("action", ""),
+                                            "evidence": ev.get("evidence", ""),
+                                            "reasoning": ev.get("reasoning", "")
+                                        })
+                            
+                            # 生成劣势推理链（从weak_points或evidence_chains中提取）
+                            weaknesses_chain = []
+                            # 优先使用Ultra格式的weak_points
+                            weak_points = row.get("weak_points", [])
+                            if weak_points and isinstance(weak_points, list) and len(weak_points) > 0:
+                                # weak_points是字符串列表，转换为推理链格式
+                                for point in weak_points[:2]:
+                                    if isinstance(point, str):
+                                        weaknesses_chain.append({
+                                            "action": "短板项",
+                                            "evidence": point,
+                                            "reasoning": point
+                                        })
+                            elif evidence_chains_ultra and isinstance(evidence_chains_ultra, dict):
+                                # 从evidence_chains中找出最低分维度
+                                score_dims = row.get("score_dims", {})
+                                if score_dims and isinstance(score_dims, dict):
+                                    dim_scores = {
+                                        "技能匹配度": score_dims.get("skill_match", 0),
+                                        "经验相关性": score_dims.get("experience_match", 0),
+                                        "成长潜力": score_dims.get("growth_potential", 0),
+                                        "稳定性": score_dims.get("stability", 0),
+                                    }
+                                    lowest_dim = min(dim_scores.items(), key=lambda x: x[1])[0]
+                                    lowest_evidences = evidence_chains_ultra.get(lowest_dim, [])
+                                    
+                                    if isinstance(lowest_evidences, list):
+                                        for ev in lowest_evidences[:2]:
+                                            if isinstance(ev, dict):
+                                                weaknesses_chain.append({
+                                                    "action": ev.get("action", ""),
+                                                    "evidence": ev.get("evidence", ""),
+                                                    "reasoning": ev.get("reasoning", "")
+                                                })
+                            
+                            # 兼容旧格式推理链
+                            if not strengths_chain and not weaknesses_chain:
+                                reasoning_raw = row.get("reasoning_chain") or {}
+                                try:
+                                    reasoning_obj = (
+                                        json.loads(reasoning_raw)
+                                        if isinstance(reasoning_raw, str)
+                                        else reasoning_raw
+                                    )
+                                except Exception:
+                                    reasoning_obj = {}
+                                
+                                strengths_chain = reasoning_obj.get("strengths_reasoning_chain") or []
+                                weaknesses_chain = reasoning_obj.get("weaknesses_reasoning_chain") or []
+                            
+                            # ========== 3. 一句话总结 ==========
+                            summary_text = _generate_summary_text(strengths_chain, weaknesses_chain)
+                            st.markdown(summary_text)
+                            
+                            st.markdown("---")
+                            
+                            # ========== 4. 两列布局（Desktop）& 单列布局（Mobile） ==========
+                            col_left, col_right = st.columns([1, 1])
+                            
+                            with col_left:
+                                # ========== 雷达图（使用Ultra score_dims字段）==========
+                                # 优先使用Ultra格式的score_dims
+                                score_dims = row.get("score_dims", {})
+                                if score_dims and isinstance(score_dims, dict):
+                                    scores_dict = {
+                                        "技能匹配度": float(score_dims.get("skill_match", 0) or 0),
+                                        "经验相关性": float(score_dims.get("experience_match", 0) or 0),
+                                        "成长潜力": float(score_dims.get("growth_potential", 0) or 0),
+                                        "稳定性": float(score_dims.get("stability", 0) or 0),
+                                    }
+                                else:
+                                    # 兼容旧字段（从维度得分获取）
+                                    scores_dict = {
+                                        "技能匹配度": float(row.get("技能匹配度", 0) or 0),
+                                        "经验相关性": float(row.get("经验相关性", 0) or 0),
+                                        "成长潜力": float(row.get("成长潜力", 0) or 0),
+                                        "稳定性": float(row.get("稳定性", 0) or 0),
+                                    }
+                                
+                                st.markdown("**📊 评分维度雷达图**")
+                                # 创建雷达图：使用uuid生成唯一key避免冲突
+                                try:
+                                    radar_fig = _create_radar_chart(scores_dict)
+                                    if radar_fig:
+                                        st.plotly_chart(radar_fig, use_container_width=True, key=f"radar_{uuid.uuid4()}")
+                                except ImportError as e:
+                                    # plotly 未安装 - 显示详细错误信息用于调试
+                                    import sys
+                                    st.error(f"❌ Plotly 导入失败: {str(e)}")
+                                    st.info(f"💡 Python 路径: {sys.executable}")
+                                    st.info("💡 提示：安装 plotly 可查看雷达图可视化")
+                                    st.info(f"💡 请运行: pip install plotly kaleido")
+                                    score_table = pd.DataFrame({
+                                        "维度": ["技能匹配度", "经验相关性", "成长潜力", "稳定性"],
+                                        "得分": [
+                                            scores_dict.get("技能匹配度", 0),
+                                            scores_dict.get("经验相关性", 0),
+                                            scores_dict.get("成长潜力", 0),
+                                            scores_dict.get("稳定性", 0),
+                                        ]
+                                    })
+                                    st.dataframe(score_table, use_container_width=True, hide_index=True)
+                                except Exception as e:
+                                    # 其他错误（创建失败、渲染失败等）
+                                    st.warning(f"⚠️ 雷达图显示失败: {str(e)[:150]}")
+                                    # 显示文本表格作为替代
+                                    score_table = pd.DataFrame({
+                                        "维度": ["技能匹配度", "经验相关性", "成长潜力", "稳定性"],
+                                        "得分": [
+                                            scores_dict.get("技能匹配度", 0),
+                                            scores_dict.get("经验相关性", 0),
+                                            scores_dict.get("成长潜力", 0),
+                                            scores_dict.get("稳定性", 0),
+                                        ]
+                                    })
+                                    st.dataframe(score_table, use_container_width=True, hide_index=True)
+                                
+                                # ========== 优势总结（从evidence_chains提取）==========
+                                with st.expander("✅ **优势总结**", expanded=False):
+                                    # 优先使用Ultra格式的evidence_chains
+                                    evidence_chains = row.get("evidence_chains", {})
+                                    if evidence_chains and isinstance(evidence_chains, dict):
+                                        # 从证据链中提取优势
+                                        for dim, evidences in evidence_chains.items():
+                                            if dim in ["技能匹配度", "经验相关性"] and evidences:
+                                                if isinstance(evidences, list):
+                                                    st.markdown(f"**{dim}：**")
+                                                    for ev in evidences[:2]:
+                                                        if isinstance(ev, dict):
+                                                            # 使用完整的推理文本，而不是只取第一句
+                                                            reasoning = ev.get("reasoning", "")
+                                                            if reasoning:
+                                                                st.markdown(f"- {reasoning}")
+                                                            else:
+                                                                # 如果没有推理，使用动作
+                                                                action = ev.get("action", "")
+                                                                if action:
+                                                                    st.markdown(f"- {action}")
+                                    elif strengths_chain:
+                                        for idx, item in enumerate(strengths_chain, 1):
+                                            if not isinstance(item, dict):
+                                                continue
+                                            conclusion = item.get('conclusion', '无结论')
+                                            st.markdown(f"**{idx}. {conclusion}**")
+                                            if idx < len(strengths_chain):
+                                                st.markdown("---")
+                                    else:
+                                        st.caption("暂无相关记录")
+                                
+                                # ========== 劣势总结（从weak_points提取）==========
+                                with st.expander("⚠️ **劣势总结**", expanded=False):
+                                    # 优先使用Ultra格式的weak_points
+                                    weak_points = row.get("weak_points", [])
+                                    
+                                    # 确保是列表格式
+                                    if isinstance(weak_points, str):
+                                        try:
+                                            weak_points = json.loads(weak_points)
+                                        except:
+                                            weak_points = [weak_points] if weak_points else []
+                                    elif not isinstance(weak_points, list):
+                                        weak_points = []
+                                    
+                                    if weak_points and len(weak_points) > 0:
+                                        for idx, point in enumerate(weak_points, 1):
+                                            point_str = str(point) if point else ""
+                                            if point_str:
+                                                st.markdown(f"**{idx}. {point_str}**")
+                                                if idx < len(weak_points):
+                                                    st.markdown("---")
+                                    elif weaknesses_chain:
+                                        for idx, item in enumerate(weaknesses_chain, 1):
+                                            if isinstance(item, dict):
+                                                # Ultra格式：action, evidence, reasoning
+                                                action = item.get("action", "")
+                                                evidence = item.get("evidence", "")
+                                                reasoning = item.get("reasoning", "")
+                                                
+                                                if action or evidence or reasoning:
+                                                    st.markdown(f"**{idx}. {action or '劣势项'}**")
+                                                    if evidence:
+                                                        st.markdown(f"   *证据：* {evidence[:80]}")
+                                                    if reasoning:
+                                                        st.markdown(f"   *推理：* {reasoning[:100]}")
+                                                    if idx < len(weaknesses_chain):
+                                                        st.markdown("---")
+                                            else:
+                                                # 兼容旧格式
+                                                conclusion = item.get('conclusion', '无结论') if isinstance(item, dict) else str(item)
+                                                st.markdown(f"**{idx}. {conclusion}**")
+                                                if idx < len(weaknesses_chain):
+                                                    st.markdown("---")
+                                    else:
+                                        st.caption("暂无相关记录")
+                            
+                            with col_right:
+                                # ========== 证据链详情（Ultra格式：四维度完整显示）==========
+                                evidence_chains_ultra = row.get("evidence_chains", {})
+                                evidence_text_ultra = row.get("evidence_text", "")
+                                
+                                if evidence_chains_ultra and isinstance(evidence_chains_ultra, dict) and len(evidence_chains_ultra) > 0:
+                                    # 使用Ultra格式的证据链（四维度）
+                                    with st.expander("📋 **证据链详情**", expanded=False):
+                                        dimension_order = ["技能匹配度", "经验相关性", "成长潜力", "稳定性"]
+                                        for dim in dimension_order:
+                                            if dim in evidence_chains_ultra:
+                                                dim_evidences = evidence_chains_ultra[dim]
+                                                if isinstance(dim_evidences, list) and len(dim_evidences) > 0:
+                                                    st.markdown(f"### 【{dim}】")
+                                                    for idx, ev in enumerate(dim_evidences, 1):
+                                                        if isinstance(ev, dict):
+                                                            action = ev.get('action', '暂无')
+                                                            evidence = ev.get('evidence', '暂无')
+                                                            reasoning = ev.get('reasoning', '暂无')
+                                                            
+                                                            st.markdown(f"**{idx}. 动作：** {action}")
+                                                            if len(evidence) > 80:
+                                                                evidence = evidence[:80] + "..."
+                                                            st.markdown(f"   **原文证据：** {evidence}")
+                                                            if len(reasoning) > 100:
+                                                                reasoning = reasoning[:100] + "..."
+                                                            st.markdown(f"   **推理：** {reasoning}")
+                                                            if idx < len(dim_evidences):
+                                                                st.markdown("---")
+                                                    if dim != dimension_order[-1]:
+                                                        st.markdown("")
+                                elif evidence_text_ultra:
+                                    # 回退到文本格式
+                                    with st.expander("📋 **证据链详情**", expanded=False):
+                                        st.markdown(f'<div style="white-space: pre-wrap; line-height: 1.6;">{evidence_text_ultra}</div>', unsafe_allow_html=True)
+                                else:
+                                    # 回退到旧格式推理链
+                                    with st.expander("🔍 **优势推理链详情**", expanded=False):
+                                        if strengths_chain:
+                                            for idx, item in enumerate(strengths_chain, 1):
+                                                if isinstance(item, dict):
+                                                    action = item.get("action", item.get("detected_actions", "未提供"))
+                                                    evidence = item.get("evidence", item.get("resume_evidence", "未提供"))
+                                                    reasoning = item.get("reasoning", item.get("ai_reasoning", "未提供"))
+                                                    st.markdown(f"""
+                                                    <div class="reasoning-item">
+                                                        <strong>{idx}. {action}</strong><br/>
+                                                        <small>证据：{evidence[:80]}</small><br/>
+                                                        <small>推断：{reasoning[:100]}</small>
+                                                    </div>
+                                                    """, unsafe_allow_html=True)
+                                        else:
+                                            st.caption("暂无相关记录")
+                                    
+                                    with st.expander("🔍 **劣势推理链详情**", expanded=False):
+                                        if weaknesses_chain:
+                                            for idx, item in enumerate(weaknesses_chain, 1):
+                                                if isinstance(item, dict):
+                                                    action = item.get("action", item.get("resume_gap", "未提供"))
+                                                    evidence = item.get("evidence", item.get("compare_to_jd", "未提供"))
+                                                    reasoning = item.get("reasoning", item.get("ai_reasoning", "未提供"))
+                                                    st.markdown(f"""
+                                                    <div class="reasoning-item">
+                                                        <strong>{idx}. {action}</strong><br/>
+                                                        <small>证据：{evidence[:80]}</small><br/>
+                                                        <small>风险：{reasoning[:100]}</small>
+                                                    </div>
+                                                    """, unsafe_allow_html=True)
+                                        else:
+                                            st.caption("暂无相关记录")
 
                     # ✅ 一键修复版：AI 匹配完成后自动保存 & 跳转
 
@@ -1193,7 +1803,7 @@ with tab4:
         if existing_invites and len(existing_invites) > 0:
             st.info(f"💡 检测到已有 {len(existing_invites)} 封已生成的邮件，您可以继续编辑或直接发送。如需重新生成，请点击下方按钮。")
             show_existing = True
-        
+
         if st.button("🚀 一键生成邀约邮件 + ICS"):
             # 获取企业微信配置（如果未设置，使用默认值）
             organizer_name = st.session_state.get("organizer_name", "HR")

@@ -29,6 +29,17 @@ FALLBACK_RESPONSE = {
         "stability": 0,
         "score_explain": "",
     },
+    "score_detail": {
+        "skill_match": {"score": 0, "evidence": []},
+        "experience_match": {"score": 0, "evidence": []},
+        "stability": {"score": 0, "evidence": []},
+        "growth_potential": {"score": 0, "evidence": []},
+        "final_score": 0,
+    },
+    "risks": [],
+    "persona_tags": [],
+    "resume_mini": "",
+    "match_summary": "信息不足，无法评估",
     "ability_model": {},
     "fallback": True,
 }
@@ -108,62 +119,169 @@ def _parse_llm_json(raw: str) -> Dict[str, Any]:
     raise ValueError("unable to parse ai insights json")
 
 
-def _call_insight_llm(job_title: str, resume_text: str, ability_model: Dict[str, Any]) -> Dict[str, Any]:
+def _call_insight_llm(job_title: str, resume_text: str, ability_model: Dict[str, Any], jd_text: str = "") -> Dict[str, Any]:
     client, cfg = get_client_and_cfg()
     prompt = textwrap.dedent(
         f"""
-        你是一名资深人才顾问，需要基于岗位名称与候选人简历，生成“岗位能力模型 + 简历诊断 + 推理链”。
+        你现在是一名专业的 AI 招聘评估官（能力模型专家 + 简历分析专家）。
+        请基于岗位 JD 和候选人简历，按照下述结构化规则输出结果。
 
         【岗位名称】
         {job_title}
 
-        【岗位能力模型（可补充）】
+        【岗位 JD】
+        {jd_text if jd_text else "未提供详细JD"}
+
+        【岗位能力模型（参考）】
         {json.dumps(ability_model, ensure_ascii=False, indent=2)}
 
         【候选人简历】
         {resume_text}
 
-        请输出严格 JSON（字段名不可更改），并务必体现“岗位 → 动作 → 推理”的链式逻辑：
+        ----------------------------------------------
+        【评分核心原则】
+        ----------------------------------------------
+        1. 不要凭空想象，不要虚构信息。
+        2. 所有评分必须基于"简历中的真实证据"。
+        3. 若无证据，则不给分或标记为 0。
+        4. 每个维度都必须输出"动作证据 + 原文引用 + 推理理由"。
+        5. 输出越结构化越好，方便前端展示。
+
+        ----------------------------------------------
+        【评分维度（每个维度 0-25 分）】
+        ----------------------------------------------
+        ① 技能匹配度（0–25 分）
+        - 与岗位要求的核心技能吻合度
+        - 电话/沟通/表达/复盘/服务等动作
+        - 证据必须来源于简历
+
+        ② 经验相关性（0–25 分）
+        - 与行业/岗位的经验相关度
+        - 是否做过类似工作、相似流程
+        - 必须引用简历中的行为或经历
+
+        ③ 稳定性（0–25 分）
+        - 任职时长
+        - 跳槽频率
+        - 能否长期胜任岗位场景
+
+        ④ 成长潜力（0–25 分）
+        - 学习意愿
+        - 表达总结能力
+        - 扩展能力标志（跨岗位学习、项目总结等）
+
+        ----------------------------------------------
+        【证据链抽取规则】
+        ----------------------------------------------
+        请从简历中提取可以作为证据的"动作行为"，例如：
+        - 电话回访、跟进家长、群接龙管理、学习督导
+        - 复盘、记录问题、阅读理解、总结报告
+        - 客情维护、服务跟踪
+        - 任何岗位相关的行为词
+
+        每条证据必须包含：
         {{
-          "resume_text": "重写短版简历（150-180字）：第一行写“核心标签：A｜B｜C”，其后包含倒序关键经历（2段，每段2-3条动作）、核心能力、教育背景。禁止照搬原文。",
-          "short_eval": {{
-            "core_strengths": ["基于能力模型的优势（≤18字）", "…"],
-            "core_weaknesses": ["基于能力模型的劣势（≤18字）", "…"],
-            "match_level": "高/中/低",
-            "match_reason": "一句话解释匹配逻辑（结合动作 + 风险）"
-          }},
-          "scores": {{
-            "total_score": <0-100>,
-            "skill_match": <0-30>,
-            "experience_match": <0-30>,
-            "growth_potential": <0-20>,
-            "stability": <0-20>,
-            "score_explain": "技能：xx；经验：xx；风险：xx"
-          }},
-          "evidence": {{
-            "strengths_reasoning_chain": [
-              {{
-                "conclusion": "能力+动作导向的优势（如“邀约动作完整，促成转化”）",
-                "detected_actions": "只写简历中出现的动作/行为（必须包含动词）",
-                "resume_evidence": "引用原文，并补充 AI 解释，格式“原文：…｜解释：…”",
-                "ai_reasoning": "三段式：岗位需要的动作 → 简历动作如何覆盖 → 为什么构成优势"
-              }}
-            ],
-            "weaknesses_reasoning_chain": [
-              {{
-                "conclusion": "基于缺失动作的劣势（如“缺少异议处理闭环”）",
-                "resume_gap": "明确缺了哪些动作，不能写“缺经验”",
-                "compare_to_jd": "岗位模型为什么必须该动作（说明业务场景）",
-                "ai_reasoning": "阐述风险：缺口→影响邀约/跟进/转化等指标→造成哪些结果"
-              }}
-            ]
-          }},
-          "ui": {{
-            "row_display": "12-18字摘要，描述候选人匹配特点",
-            "highlights": ["2个标签，每个≤4字，来源于岗位动作/能力模型"]
-          }}
+          "action": "识别的动作",
+          "resume_quote": "简历中对应的原文片段",
+          "reason": "该动作与岗位的关系解释"
         }}
-        仅返回 JSON。
+
+        ----------------------------------------------
+        【风险识别（最多 3 条）】
+        ----------------------------------------------
+        请识别并输出最多 3 条风险：
+        - 跳槽频繁
+        - 任期短
+        - 行业不匹配
+        - 能力缺失（根据 JD）
+        - 与岗位关键动作无证据支撑
+
+        格式：
+        {{
+          "risk_type": "风险类型",
+          "evidence": "对应的简历内容",
+          "reason": "风险原因说明"
+        }}
+
+        ----------------------------------------------
+        【人才画像标签（3-6 个）】
+        ----------------------------------------------
+        基于整体证据自动生成 3–6 个标签，让 HR 一眼看懂候选人特征，例如：
+        - 沟通型
+        - 行动力强
+        - 客户导向
+        - 教育经验弱
+        - 稳定性一般
+
+        ----------------------------------------------
+        【最终需要输出的 JSON 结构】
+        ----------------------------------------------
+        请严格输出以下 JSON，不要多字段，不要缺字段：
+
+        {{
+          "score_detail": {{
+            "skill_match": {{
+              "score": <0-25>,
+              "evidence": [
+                {{
+                  "action": "识别的动作",
+                  "resume_quote": "简历原文片段",
+                  "reason": "该动作与岗位的关系"
+                }}
+              ]
+            }},
+            "experience_match": {{
+              "score": <0-25>,
+              "evidence": [
+                {{
+                  "action": "识别的动作",
+                  "resume_quote": "简历原文片段",
+                  "reason": "该动作与岗位的关系"
+                }}
+              ]
+            }},
+            "stability": {{
+              "score": <0-25>,
+              "evidence": [
+                {{
+                  "action": "任职时长/跳槽频率等",
+                  "resume_quote": "简历原文片段",
+                  "reason": "稳定性分析"
+                }}
+              ]
+            }},
+            "growth_potential": {{
+              "score": <0-25>,
+              "evidence": [
+                {{
+                  "action": "学习/总结/扩展等动作",
+                  "resume_quote": "简历原文片段",
+                  "reason": "成长潜力分析"
+                }}
+              ]
+            }},
+            "final_score": <0-100>
+          }},
+          "risks": [
+            {{
+              "risk_type": "风险类型",
+              "evidence": "简历内容",
+              "reason": "风险原因"
+            }}
+          ],
+          "persona_tags": ["标签1", "标签2", "标签3"],
+          "resume_mini": "简历的简短 2–3 行摘要",
+          "match_summary": "一句话总结（推荐/需重点关注/不匹配）"
+        }}
+
+        ----------------------------------------------
+        【注意事项】
+        ----------------------------------------------
+        - 所有分数必须基于证据链
+        - resume_mini 应为简历的简短 2–3 行摘要
+        - match_summary 应为一句话总结（推荐/需重点关注/不匹配）
+        - 不要输出额外解释文本，只输出 JSON
+        - final_score = skill_match + experience_match + stability + growth_potential
         """
     )
     response = chat_completion(
@@ -223,21 +341,53 @@ def _trim(text: str, limit: int) -> str:
     return content[:limit].rstrip() + "…"
 
 
-def generate_ai_insights(job_title: str, resume_text: str) -> Dict[str, Any]:
+def generate_ai_insights(job_title: str, resume_text: str, jd_text: str = "") -> Dict[str, Any]:
     job_title = (job_title or "").strip()
     resume_text = (resume_text or "").strip()
+    jd_text = (jd_text or "").strip()
     if not job_title or not resume_text:
         return FALLBACK_RESPONSE.copy()
 
     ability_model = ability_model_generator(job_title)
     try:
-        payload = _call_insight_llm(job_title, resume_text, ability_model)
-    except Exception:
+        payload = _call_insight_llm(job_title, resume_text, ability_model, jd_text)
+    except Exception as e:
+        import sys
+        print(f"[ERROR] AI insights generation failed: {e}", file=sys.stderr)
         return FALLBACK_RESPONSE.copy()
+
+    # 解析新的 score_detail 格式
+    score_detail = payload.get("score_detail", {})
+    if not score_detail:
+        # 兼容旧格式
+        old_scores = payload.get("scores", {})
+        score_detail = {
+            "skill_match": {"score": float(old_scores.get("skill_match", 0)), "evidence": []},
+            "experience_match": {"score": float(old_scores.get("experience_match", 0)), "evidence": []},
+            "stability": {"score": float(old_scores.get("stability", 0)), "evidence": []},
+            "growth_potential": {"score": float(old_scores.get("growth_potential", 0)), "evidence": []},
+            "final_score": float(old_scores.get("total_score", 0)),
+        }
+
+    # 提取各维度分数（用于兼容旧代码）
+    skill_score = float(score_detail.get("skill_match", {}).get("score", 0))
+    exp_score = float(score_detail.get("experience_match", {}).get("score", 0))
+    stability_score = float(score_detail.get("stability", {}).get("score", 0))
+    growth_score = float(score_detail.get("growth_potential", {}).get("score", 0))
+    final_score = float(score_detail.get("final_score", skill_score + exp_score + stability_score + growth_score))
+
+    # 规范化到 0-100 分制（用于显示）
+    normalized_scores = {
+        "skill_match": round(skill_score / 25.0 * 100.0, 1) if skill_score > 0 else 0.0,
+        "experience_match": round(exp_score / 25.0 * 100.0, 1) if exp_score > 0 else 0.0,
+        "stability": round(stability_score / 25.0 * 100.0, 1) if stability_score > 0 else 0.0,
+        "growth_potential": round(growth_score / 25.0 * 100.0, 1) if growth_score > 0 else 0.0,
+        "total_score": round(final_score, 1),
+    }
 
     insights = {
         "ability_model": ability_model,
-        "resume_text": _trim(payload.get("resume_text", ""), 190),
+        "resume_text": _trim(payload.get("resume_mini", payload.get("resume_text", "")), 190),
         "short_eval": {
             "core_strengths": [
                 _trim(item, 18) for item in _ensure_list(payload.get("short_eval", {}).get("core_strengths"))
@@ -246,21 +396,18 @@ def generate_ai_insights(job_title: str, resume_text: str) -> Dict[str, Any]:
                 _trim(item, 18) for item in _ensure_list(payload.get("short_eval", {}).get("core_weaknesses"))
             ],
             "match_level": payload.get("short_eval", {}).get("match_level", ""),
-            "match_reason": _trim(payload.get("short_eval", {}).get("match_reason", ""), 40),
+            "match_reason": _trim(payload.get("short_eval", {}).get("match_reason", payload.get("match_summary", "")), 40),
         },
-        "scores": {
-            "total_score": float(payload.get("scores", {}).get("total_score", 0)),
-            "skill_match": float(payload.get("scores", {}).get("skill_match", 0)),
-            "experience_match": float(payload.get("scores", {}).get("experience_match", 0)),
-            "growth_potential": float(payload.get("scores", {}).get("growth_potential", 0)),
-            "stability": float(payload.get("scores", {}).get("stability", 0)),
-            "score_explain": payload.get("scores", {}).get("score_explain", ""),
-        },
+        "scores": normalized_scores,  # 规范化后的分数（0-100）
+        "score_detail": score_detail,  # 原始分数（0-25）和证据链
+        "risks": payload.get("risks", []),
+        "persona_tags": payload.get("persona_tags", []),
+        "match_summary": payload.get("match_summary", ""),
         "evidence": _sanitize_evidence(payload.get("evidence", {})),
         "ui": {
             "row_display": _trim(payload.get("ui", {}).get("row_display", ""), 18),
             "highlights": [
-                _trim(item, 4) for item in _ensure_list(payload.get("ui", {}).get("highlights"))[:2]
+                _trim(item, 4) for item in _ensure_list(payload.get("ui", {}).get("highlights") or payload.get("persona_tags", []))[:2]
             ],
         },
         "fallback": False,

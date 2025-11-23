@@ -33,10 +33,10 @@ EDUCATION_BOOST_RULES = [
 ]
 
 DIME_META = {
-    "技能匹配度": {"max": 30.0, "weight": 0.30},
-    "经验相关性": {"max": 30.0, "weight": 0.30},
-    "成长潜力": {"max": 20.0, "weight": 0.20},
-    "稳定性": {"max": 20.0, "weight": 0.20},
+    "技能匹配度": {"max": 25.0, "weight": 0.25},
+    "经验相关性": {"max": 25.0, "weight": 0.25},
+    "成长潜力": {"max": 25.0, "weight": 0.25},
+    "稳定性": {"max": 25.0, "weight": 0.25},
 }
 
 DOMAIN_KEYWORDS = {
@@ -758,22 +758,42 @@ def ai_score_one(client, cfg, jd_text: str, resume_text: str, job_title: str = "
         insights = FALLBACK_RESPONSE.copy()
     else:
         heuristic_scores = _heuristic_score_from_text(jd_text, safe_resume_text, job_title_clean)
-        insights = generate_ai_insights(job_title_clean, safe_resume_text)
+        insights = generate_ai_insights(job_title_clean, safe_resume_text, jd_clean)
 
     data = dict(heuristic_scores)
     data["ability_model"] = insights.get("ability_model", {})
 
     def _merge_scores():
-        scores = insights.get("scores") or {}
-        dim = data.get("维度得分", {})
-        data["总分"] = float(scores.get("total_score", data.get("总分", 0)))
-        data["维度得分"] = {
-            "技能匹配度": float(scores.get("skill_match", dim.get("技能匹配度", 0))),
-            "经验相关性": float(scores.get("experience_match", dim.get("经验相关性", 0))),
-            "成长潜力": float(scores.get("growth_potential", dim.get("成长潜力", 0))),
-            "稳定性": float(scores.get("stability", dim.get("稳定性", 0))),
-        }
-        data["score_explain"] = scores.get("score_explain", "")
+        # 优先使用新的 score_detail 格式
+        score_detail = insights.get("score_detail", {})
+        if score_detail:
+            # 使用规范化后的分数（0-100）
+            scores = insights.get("scores", {})
+            dim = data.get("维度得分", {})
+            data["总分"] = float(scores.get("total_score", data.get("总分", 0)))
+            data["维度得分"] = {
+                "技能匹配度": float(scores.get("skill_match", dim.get("技能匹配度", 0))),
+                "经验相关性": float(scores.get("experience_match", dim.get("经验相关性", 0))),
+                "成长潜力": float(scores.get("growth_potential", dim.get("成长潜力", 0))),
+                "稳定性": float(scores.get("stability", dim.get("稳定性", 0))),
+            }
+            # 保存原始 score_detail（包含证据链）
+            data["score_detail"] = score_detail
+            data["risks"] = insights.get("risks", [])
+            data["persona_tags"] = insights.get("persona_tags", [])
+            data["match_summary"] = insights.get("match_summary", "")
+        else:
+            # 兼容旧格式
+            scores = insights.get("scores") or {}
+            dim = data.get("维度得分", {})
+            data["总分"] = float(scores.get("total_score", data.get("总分", 0)))
+            data["维度得分"] = {
+                "技能匹配度": float(scores.get("skill_match", dim.get("技能匹配度", 0))),
+                "经验相关性": float(scores.get("experience_match", dim.get("经验相关性", 0))),
+                "成长潜力": float(scores.get("growth_potential", dim.get("成长潜力", 0))),
+                "稳定性": float(scores.get("stability", dim.get("稳定性", 0))),
+            }
+            data["score_explain"] = scores.get("score_explain", "")
 
     def _apply_short_eval():
         short_eval_struct = insights.get("short_eval") or {}
@@ -803,11 +823,21 @@ def ai_score_one(client, cfg, jd_text: str, resume_text: str, job_title: str = "
         data["总分"] = 0
         data["维度得分"] = {"技能匹配度": 0, "经验相关性": 0, "成长潜力": 0, "稳定性": 0}
         data["score_explain"] = ""
+        data["score_detail"] = {
+            "skill_match": {"score": 0, "evidence": []},
+            "experience_match": {"score": 0, "evidence": []},
+            "stability": {"score": 0, "evidence": []},
+            "growth_potential": {"score": 0, "evidence": []},
+            "final_score": 0,
+        }
+        data["risks"] = []
+        data["persona_tags"] = []
+        data["match_summary"] = "信息不足，无法评估"
 
     _apply_short_eval()
     _apply_evidence()
     _apply_ui()
-
+    
     return data
 
 
@@ -889,28 +919,28 @@ def ai_match_resumes_df(jd_text: str, resumes_df: pd.DataFrame, job_title: str =
         evidence_struct = result.get("reasoning_chain") or {}
 
         row_data = {
-            "candidate_id": resumes_df.loc[idx, "candidate_id"] if "candidate_id" in resumes_df.columns else None,
-            "file": file_name,
-            "name": resumes_df.loc[idx, "name"] if "name" in resumes_df.columns else "",
-            "email": resumes_df.loc[idx, "email"] if "email" in resumes_df.columns else "",
-            "phone": resumes_df.loc[idx, "phone"] if "phone" in resumes_df.columns else "",
-            "resume_text": resume_text,
+                "candidate_id": resumes_df.loc[idx, "candidate_id"] if "candidate_id" in resumes_df.columns else None,
+                "file": file_name,
+                "name": resumes_df.loc[idx, "name"] if "name" in resumes_df.columns else "",
+                "email": resumes_df.loc[idx, "email"] if "email" in resumes_df.columns else "",
+                "phone": resumes_df.loc[idx, "phone"] if "phone" in resumes_df.columns else "",
+                "resume_text": resume_text,
             "resume_mini": result.get("resume_mini", ""),
             "job_title": effective_job_label or job_title or "",
-            "总分": result.get("总分", 0),
-            "技能匹配度": result.get("维度得分", {}).get("技能匹配度", 0),
-            "经验相关性": result.get("维度得分", {}).get("经验相关性", 0),
-            "成长潜力": result.get("维度得分", {}).get("成长潜力", 0),
-            "稳定性": result.get("维度得分", {}).get("稳定性", 0),
-            "short_eval": result.get("short_eval") or result.get("简评", ""),
+                "总分": result.get("总分", 0),
+                "技能匹配度": result.get("维度得分", {}).get("技能匹配度", 0),
+                "经验相关性": result.get("维度得分", {}).get("经验相关性", 0),
+                "成长潜力": result.get("维度得分", {}).get("成长潜力", 0),
+                "稳定性": result.get("维度得分", {}).get("稳定性", 0),
+                "short_eval": result.get("short_eval") or result.get("简评", ""),
             "short_eval_struct": json.dumps(short_eval_struct, ensure_ascii=False),
             "ability_model": json.dumps(result.get("ability_model", {}), ensure_ascii=False),
             "reasoning_chain": json.dumps(evidence_struct, ensure_ascii=False),
             "证据": result.get("证据") if isinstance(result.get("证据"), str) else (
                 "\n".join(result.get("证据") or []) if isinstance(result.get("证据"), list) else "【优势证据】\n1. 优势 → 简历未体现相关内容\n\n【劣势证据】\n1. 劣势 → 简历未体现相关内容"
             ),
-            "text_len": resumes_df.loc[idx, "text_len"] if "text_len" in resumes_df.columns else len(resume_text),
-        }
+                "text_len": resumes_df.loc[idx, "text_len"] if "text_len" in resumes_df.columns else len(resume_text),
+            }
         
         # 添加新格式的字段（如果存在）
         if "score_explain" in result:

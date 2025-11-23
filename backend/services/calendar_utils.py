@@ -1,17 +1,18 @@
 # backend/services/calendar_utils.py
 """
-日历工具:生成 ICS 日历文件 (符合 RFC 5545 标准)
+日历工具:生成 ICS 日历文件 (符合 RFC 5545 标准，兼容 iPhone、Android、QQ 邮箱)
 """
 from pathlib import Path
 from datetime import datetime, timedelta
-import uuid
-import re
 import random
 import string
 
 
 def escape_ics_text(text: str) -> str:
-    """转义 ICS 文本中的特殊字符（RFC 5545）"""
+    """
+    转义 ICS 文本中的特殊字符（RFC 5545）
+    注意：DESCRIPTION 中的换行必须使用 \\n，而不是实际换行
+    """
     if not text:
         return ""
     # 先替换英文逗号为中文逗号（符合用户要求：DESCRIPTION中不得包含英文逗号）
@@ -19,13 +20,15 @@ def escape_ics_text(text: str) -> str:
     # 转义特殊字符（RFC 5545要求）
     text = text.replace('\\', '\\\\')  # 必须先转义反斜杠
     text = text.replace(';', '\\;')
+    # 将实际换行转换为 \n（DESCRIPTION 中必须使用 \n 而不是实际换行）
+    text = text.replace('\r\n', '\\n')
+    text = text.replace('\r', '\\n')
     text = text.replace('\n', '\\n')
-    # 注意：中文逗号不需要转义，只有ASCII逗号需要转义为\,，但我们已经替换为中文逗号了
     return text
 
 
 def generate_random_string(length: int = 6) -> str:
-    """生成随机字符串"""
+    """生成随机字符串（用于UID）"""
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
 
 
@@ -79,55 +82,57 @@ def create_ics_file(
     uid = f"{start_time_str}-{random_str}@interview.ai"
     
     # 格式化时间
-    # DTSTART/DTEND: 本地时间，不带Z，格式：YYYYMMDDTHHMMSS
+    # DTSTART/DTEND: 使用TZID指定时区，格式：YYYYMMDDTHHMMSS（不带Z）
     dtstart_str = start_dt_local.strftime('%Y%m%dT%H%M%S')
     dtend_str = end_dt_local.strftime('%Y%m%dT%H%M%S')
     
     # DTSTAMP: UTC时间，必须以Z结尾，格式：YYYYMMDDTHHMMSSZ
     dtstamp_str = datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')
     
-    # 转义特殊字符
-    summary_escaped = escape_ics_text(title)
-    location_escaped = escape_ics_text(location) if location else ""
-    description_escaped = escape_ics_text(description) if description else "自动生成的面试邀约"
+    # 时区处理：确保使用Asia/Shanghai（QQ邮箱、iOS、Android都需要TZID才能显示"加入日历"按钮）
+    timezone_map = {
+        "Asia/Shanghai": "Asia/Shanghai",
+        "Asia/Beijing": "Asia/Shanghai",  # 北京和上海使用同一时区
+    }
+    tzid = timezone_map.get(timezone_str, "Asia/Shanghai")  # 默认使用Asia/Shanghai
     
-    # 生成 ICS 内容（严格按照 RFC 5545 标准）
+    # 转义特殊字符（所有字段都必须存在，不能为空）
+    summary_escaped = escape_ics_text(title) if title else "面试邀请"
+    location_escaped = escape_ics_text(location) if location else "待确认"
+    description_escaped = escape_ics_text(description) if description else "请准时参加面试。"
+    
+    # 生成 ICS 内容（严格按照 RFC 5545 标准，兼容 iPhone、Android、QQ 邮箱）
+    # 注意：所有字段都必须存在，任何缺失都会导致 iOS 无法导入
+    # 注意：使用 LF 换行符（\n），不使用 CRLF（\r\n）
     ics_lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
+        "PRODID:-//InterviewAI//Schedule System//CN",
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
         "BEGIN:VEVENT",
         f"UID:{uid}",
         f"DTSTAMP:{dtstamp_str}",
         f"SUMMARY:{summary_escaped}",
-        f"DTSTART:{dtstart_str}",
-        f"DTEND:{dtend_str}",
-    ]
-    
-    # 添加地点（如果有）
-    if location_escaped:
-        ics_lines.append(f"LOCATION:{location_escaped}")
-    
-    # 添加描述（如果有）
-    if description_escaped:
-        ics_lines.append(f"DESCRIPTION:{description_escaped}")
-    
-    # 结束标记
-    ics_lines.extend([
+        f"DTSTART;TZID={tzid}:{dtstart_str}",
+        f"DTEND;TZID={tzid}:{dtend_str}",
+        f"LOCATION:{location_escaped}",
+        f"DESCRIPTION:{description_escaped}",
         "END:VEVENT",
         "END:VCALENDAR"
-    ])
+    ]
     
-    # 组合成完整的ICS内容
+    # 组合成完整的ICS内容（使用 LF 换行符，确保 iOS 兼容）
     ics_content = "\n".join(ics_lines)
     
     # 确保输出目录存在
     out_dir = Path("reports/invites")
     out_dir.mkdir(parents=True, exist_ok=True)
     
-    # 保存文件（UTF-8编码）
+    # 保存文件（UTF-8编码，使用 LF 换行符）
     ics_path = out_dir / f"invite_{uid.replace('@', '_at_').replace(':', '_')}.ics"
-    ics_path.write_text(ics_content, encoding="utf-8")
+    # 使用 newline='' 确保写入时使用 LF，而不是系统的默认换行符
+    with open(ics_path, 'w', encoding='utf-8', newline='') as f:
+        f.write(ics_content)
     
     return str(ics_path)
