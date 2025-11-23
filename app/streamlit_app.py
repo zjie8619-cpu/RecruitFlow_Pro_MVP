@@ -1249,66 +1249,105 @@ with tab2:
                             
                             st.markdown("---")
                             
-                            # ========== 2. 从Ultra evidence_chains生成优势/劣势推理链 ==========
-                            evidence_chains_ultra = row.get("evidence_chains", {})
+                            # ========== 2. 从Ultra Format读取优势/劣势推理链 ==========
+                            # 优先使用Ultra-Format标准字段
+                            strengths_reasoning_chain = row.get("strengths_reasoning_chain", {})
+                            weaknesses_reasoning_chain = row.get("weaknesses_reasoning_chain", {})
                             
-                            # 生成优势推理链（从evidence_chains中挑选最强的2条）
+                            # 转换为列表格式（用于前端显示）
                             strengths_chain = []
-                            if evidence_chains_ultra and isinstance(evidence_chains_ultra, dict):
-                                # 优先从技能匹配度和经验相关性中提取
-                                skill_evidences = evidence_chains_ultra.get("技能匹配度", [])
-                                exp_evidences = evidence_chains_ultra.get("经验相关性", [])
-                                
-                                # 确保是列表格式
-                                if not isinstance(skill_evidences, list):
-                                    skill_evidences = []
-                                if not isinstance(exp_evidences, list):
-                                    exp_evidences = []
-                                
-                                for ev in (skill_evidences + exp_evidences)[:2]:
-                                    if isinstance(ev, dict):
-                                        strengths_chain.append({
-                                            "action": ev.get("action", ""),
-                                            "evidence": ev.get("evidence", ""),
-                                            "reasoning": ev.get("reasoning", "")
-                                        })
-                            
-                            # 生成劣势推理链（从weak_points或evidence_chains中提取）
                             weaknesses_chain = []
-                            # 优先使用Ultra格式的weak_points
-                            weak_points = row.get("weak_points", [])
-                            if weak_points and isinstance(weak_points, list) and len(weak_points) > 0:
-                                # weak_points是字符串列表，转换为推理链格式
-                                for point in weak_points[:2]:
-                                    if isinstance(point, str):
-                                        weaknesses_chain.append({
-                                            "action": "短板项",
-                                            "evidence": point,
-                                            "reasoning": point
-                                        })
-                            elif evidence_chains_ultra and isinstance(evidence_chains_ultra, dict):
-                                # 从evidence_chains中找出最低分维度
-                                score_dims = row.get("score_dims", {})
-                                if score_dims and isinstance(score_dims, dict):
-                                    dim_scores = {
-                                        "技能匹配度": score_dims.get("skill_match", 0),
-                                        "经验相关性": score_dims.get("experience_match", 0),
-                                        "成长潜力": score_dims.get("growth_potential", 0),
-                                        "稳定性": score_dims.get("stability", 0),
-                                    }
-                                    lowest_dim = min(dim_scores.items(), key=lambda x: x[1])[0]
-                                    lowest_evidences = evidence_chains_ultra.get(lowest_dim, [])
-                                    
-                                    if isinstance(lowest_evidences, list):
-                                        for ev in lowest_evidences[:2]:
-                                            if isinstance(ev, dict):
-                                                weaknesses_chain.append({
-                                                    "action": ev.get("action", ""),
-                                                    "evidence": ev.get("evidence", ""),
-                                                    "reasoning": ev.get("reasoning", "")
-                                                })
                             
-                            # 兼容旧格式推理链
+                            # 处理优势推理链
+                            if strengths_reasoning_chain and isinstance(strengths_reasoning_chain, dict):
+                                # Ultra-Format: {conclusion, detected_actions, resume_evidence, ai_reasoning}
+                                conclusion = strengths_reasoning_chain.get("conclusion", "")
+                                detected_actions = strengths_reasoning_chain.get("detected_actions", [])
+                                resume_evidence = strengths_reasoning_chain.get("resume_evidence", [])
+                                ai_reasoning = strengths_reasoning_chain.get("ai_reasoning", "")
+                                
+                                if conclusion or detected_actions or resume_evidence:
+                                    strengths_chain.append({
+                                        "conclusion": conclusion or "具备岗位所需的核心能力",
+                                        "detected_actions": ", ".join(detected_actions[:3]) if isinstance(detected_actions, list) else str(detected_actions),
+                                        "resume_evidence": ", ".join(resume_evidence[:3]) if isinstance(resume_evidence, list) else str(resume_evidence),
+                                        "ai_reasoning": ai_reasoning
+                                    })
+                            
+                            # 处理劣势推理链
+                            if weaknesses_reasoning_chain and isinstance(weaknesses_reasoning_chain, dict):
+                                # Ultra-Format: {conclusion, resume_gap, compare_to_jd, ai_reasoning}
+                                conclusion = weaknesses_reasoning_chain.get("conclusion", "")
+                                resume_gap = weaknesses_reasoning_chain.get("resume_gap", [])
+                                compare_to_jd = weaknesses_reasoning_chain.get("compare_to_jd", "")
+                                ai_reasoning = weaknesses_reasoning_chain.get("ai_reasoning", "")
+                                
+                                if conclusion or resume_gap or compare_to_jd:
+                                    weaknesses_chain.append({
+                                        "conclusion": conclusion or "存在不足",
+                                        "resume_gap": ", ".join(resume_gap[:3]) if isinstance(resume_gap, list) else str(resume_gap),
+                                        "compare_to_jd": compare_to_jd,
+                                        "ai_reasoning": ai_reasoning
+                                    })
+                            
+                            # 如果Ultra-Format字段为空，从evidence_chains生成（兼容逻辑）
+                            if not strengths_chain and not weaknesses_chain:
+                                evidence_chains_ultra = row.get("evidence_chains", {})
+                                
+                                # 生成优势推理链（从evidence_chains中挑选最强的2条）
+                                if evidence_chains_ultra and isinstance(evidence_chains_ultra, dict):
+                                    # 优先从技能匹配度和经验相关性中提取
+                                    skill_evidences = evidence_chains_ultra.get("技能匹配度", [])
+                                    exp_evidences = evidence_chains_ultra.get("经验相关性", [])
+                                    
+                                    # 确保是列表格式
+                                    if not isinstance(skill_evidences, list):
+                                        skill_evidences = []
+                                    if not isinstance(exp_evidences, list):
+                                        exp_evidences = []
+                                    
+                                    for ev in (skill_evidences + exp_evidences)[:2]:
+                                        if isinstance(ev, dict):
+                                            strengths_chain.append({
+                                                "action": ev.get("action", ""),
+                                                "evidence": ev.get("evidence", ""),
+                                                "reasoning": ev.get("reasoning", "")
+                                            })
+                                
+                                # 生成劣势推理链（从weak_points或evidence_chains中提取）
+                                weak_points = row.get("weak_points", [])
+                                if weak_points and isinstance(weak_points, list) and len(weak_points) > 0:
+                                    # weak_points是字符串列表，转换为推理链格式
+                                    for point in weak_points[:2]:
+                                        if isinstance(point, str):
+                                            weaknesses_chain.append({
+                                                "action": "短板项",
+                                                "evidence": point,
+                                                "reasoning": point
+                                            })
+                                elif evidence_chains_ultra and isinstance(evidence_chains_ultra, dict):
+                                    # 从evidence_chains中找出最低分维度
+                                    score_dims = row.get("score_dims", {})
+                                    if score_dims and isinstance(score_dims, dict):
+                                        dim_scores = {
+                                            "技能匹配度": score_dims.get("skill_match", 0),
+                                            "经验相关性": score_dims.get("experience_match", 0),
+                                            "成长潜力": score_dims.get("growth_potential", 0),
+                                            "稳定性": score_dims.get("stability", 0),
+                                        }
+                                        lowest_dim = min(dim_scores.items(), key=lambda x: x[1])[0]
+                                        lowest_evidences = evidence_chains_ultra.get(lowest_dim, [])
+                                        
+                                        if isinstance(lowest_evidences, list):
+                                            for ev in lowest_evidences[:2]:
+                                                if isinstance(ev, dict):
+                                                    weaknesses_chain.append({
+                                                        "action": ev.get("action", ""),
+                                                        "evidence": ev.get("evidence", ""),
+                                                        "reasoning": ev.get("reasoning", "")
+                                                    })
+                            
+                            # 兼容旧格式推理链（最后回退）
                             if not strengths_chain and not weaknesses_chain:
                                 reasoning_raw = row.get("reasoning_chain") or {}
                                 try:
@@ -1320,8 +1359,13 @@ with tab2:
                                 except Exception:
                                     reasoning_obj = {}
                                 
-                                strengths_chain = reasoning_obj.get("strengths_reasoning_chain") or []
-                                weaknesses_chain = reasoning_obj.get("weaknesses_reasoning_chain") or []
+                                old_strengths = reasoning_obj.get("strengths_reasoning_chain") or []
+                                old_weaknesses = reasoning_obj.get("weaknesses_reasoning_chain") or []
+                                
+                                if isinstance(old_strengths, list):
+                                    strengths_chain = old_strengths
+                                if isinstance(old_weaknesses, list):
+                                    weaknesses_chain = old_weaknesses
                             
                             # ========== 3. 一句话总结 ==========
                             summary_text = _generate_summary_text(strengths_chain, weaknesses_chain)
@@ -1353,11 +1397,14 @@ with tab2:
                                     }
                                 
                                 st.markdown("**📊 评分维度雷达图**")
-                                # 创建雷达图：使用uuid生成唯一key避免冲突
+                                # 创建雷达图：使用候选人ID+uuid生成唯一key避免冲突
                                 try:
                                     radar_fig = _create_radar_chart(scores_dict)
                                     if radar_fig:
-                                        st.plotly_chart(radar_fig, use_container_width=True, key=f"radar_{uuid.uuid4()}")
+                                        # 使用候选人ID（如果有）和uuid生成唯一key
+                                        candidate_id = str(row.get("候选人ID", "")) or str(row.get("id", "")) or "unknown"
+                                        unique_key = f"radar_{candidate_id}_{uuid.uuid4().hex[:8]}"
+                                        st.plotly_chart(radar_fig, use_container_width=True, key=unique_key)
                                 except ImportError as e:
                                     # plotly 未安装 - 显示详细错误信息用于调试
                                     import sys
@@ -1415,8 +1462,19 @@ with tab2:
                                         for idx, item in enumerate(strengths_chain, 1):
                                             if not isinstance(item, dict):
                                                 continue
-                                            conclusion = item.get('conclusion', '无结论')
+                                            # Ultra-Format字段
+                                            conclusion = item.get('conclusion', item.get('action', '无结论'))
+                                            detected_actions = item.get('detected_actions', item.get('action', ''))
+                                            resume_evidence = item.get('resume_evidence', item.get('evidence', ''))
+                                            ai_reasoning = item.get('ai_reasoning', item.get('reasoning', ''))
+                                            
                                             st.markdown(f"**{idx}. {conclusion}**")
+                                            if detected_actions:
+                                                st.markdown(f"   *动作：* {detected_actions[:80]}")
+                                            if resume_evidence:
+                                                st.markdown(f"   *证据：* {resume_evidence[:80]}")
+                                            if ai_reasoning:
+                                                st.markdown(f"   *推理：* {ai_reasoning[:100]}")
                                             if idx < len(strengths_chain):
                                                 st.markdown("---")
                                     else:
@@ -1446,17 +1504,21 @@ with tab2:
                                     elif weaknesses_chain:
                                         for idx, item in enumerate(weaknesses_chain, 1):
                                             if isinstance(item, dict):
-                                                # Ultra格式：action, evidence, reasoning
-                                                action = item.get("action", "")
-                                                evidence = item.get("evidence", "")
-                                                reasoning = item.get("reasoning", "")
+                                                # Ultra-Format字段
+                                                conclusion = item.get("conclusion", item.get("action", "劣势项"))
+                                                resume_gap = item.get("resume_gap", item.get("evidence", ""))
+                                                compare_to_jd = item.get("compare_to_jd", "")
+                                                ai_reasoning = item.get("ai_reasoning", item.get("reasoning", ""))
                                                 
-                                                if action or evidence or reasoning:
-                                                    st.markdown(f"**{idx}. {action or '劣势项'}**")
-                                                    if evidence:
-                                                        st.markdown(f"   *证据：* {evidence[:80]}")
-                                                    if reasoning:
-                                                        st.markdown(f"   *推理：* {reasoning[:100]}")
+                                                if conclusion or resume_gap or compare_to_jd or ai_reasoning:
+                                                    st.markdown(f"**{idx}. {conclusion}**")
+                                                    if resume_gap:
+                                                        gap_text = resume_gap if isinstance(resume_gap, str) else ", ".join(resume_gap[:3]) if isinstance(resume_gap, list) else str(resume_gap)
+                                                        st.markdown(f"   *缺失项：* {gap_text[:80]}")
+                                                    if compare_to_jd:
+                                                        st.markdown(f"   *对比JD：* {compare_to_jd[:80]}")
+                                                    if ai_reasoning:
+                                                        st.markdown(f"   *推理：* {ai_reasoning[:100]}")
                                                     if idx < len(weaknesses_chain):
                                                         st.markdown("---")
                                             else:

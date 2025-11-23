@@ -2,10 +2,11 @@
 Ultra 版评分引擎 - 整合所有模块
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, List
 from backend.services.scoring_graph import ScoringGraph, ScoringResult
 from backend.services.field_generators import FieldGenerators
 from backend.services.robust_parser import RobustParser
+from backend.services.ultra_format_validator import UltraFormatValidator
 
 
 class UltraScoringEngine:
@@ -118,6 +119,16 @@ class UltraScoringEngine:
             if dim_evidences:
                 evidence_chains[dim] = dim_evidences
         
+        # 生成优势推理链（Ultra-Format）
+        strengths_reasoning_chain = self._generate_strengths_reasoning_chain(
+            scoring_result, evidence_chains
+        )
+        
+        # 生成劣势推理链（Ultra-Format）
+        weaknesses_reasoning_chain = self._generate_weaknesses_reasoning_chain(
+            scoring_result, evidence_chains
+        )
+        
         # 构建最终输出（Ultra-Format规范）
         result = {
             # Ultra-Format标准字段
@@ -203,10 +214,15 @@ class UltraScoringEngine:
             # 四个Ultra字段（兼容字段）
             "ai_review": ai_review,
             "highlight_tags": highlight_tags,
+            "persona_tags": highlight_tags,  # Ultra-Format标准字段名
             "ai_resume_summary": ai_resume_summary,
             "summary_short": summary_short,  # Ultra格式摘要
             "evidence_text": evidence_text,
             "weak_points": weak_points,  # 新增：短板简历
+            
+            # Ultra-Format推理链（必须字段）
+            "strengths_reasoning_chain": strengths_reasoning_chain,
+            "weaknesses_reasoning_chain": weaknesses_reasoning_chain,
             
             # 风险
             "risks": [
@@ -221,6 +237,7 @@ class UltraScoringEngine:
             # 匹配度
             "match_level": scoring_result.match_level,
             "match_summary": scoring_result.match_level,
+            "resume_mini": summary_short or ai_resume_summary,  # Ultra-Format字段
             
             # 可解释性
             "score_explanation": scoring_result.score_explanation,
@@ -230,7 +247,156 @@ class UltraScoringEngine:
             "evidence_count": len(scoring_result.evidence_chain),
         }
         
+        # 验证并修复 Ultra-Format
+        is_valid, errors = UltraFormatValidator.validate(result)
+        if not is_valid:
+            print(f"[WARNING] Ultra-Format 验证失败: {errors}")
+            result = UltraFormatValidator.fix(result)
+            # 重新验证
+            is_valid, errors = UltraFormatValidator.validate(result)
+            if not is_valid:
+                print(f"[ERROR] Ultra-Format 修复后仍失败: {errors}")
+            else:
+                print(f"[INFO] Ultra-Format 已自动修复")
+        
         return result
+    
+    def _generate_strengths_reasoning_chain(
+        self,
+        scoring_result: ScoringResult,
+        evidence_chains: Dict[str, List[Dict[str, Any]]]
+    ) -> Dict[str, Any]:
+        """
+        生成优势推理链（Ultra-Format）
+        
+        格式：
+        {
+            "conclusion": str,
+            "detected_actions": [str],
+            "resume_evidence": [str],
+            "ai_reasoning": str
+        }
+        """
+        # 从技能匹配度和经验相关性中提取优势
+        skill_evidences = evidence_chains.get("技能匹配度", [])
+        exp_evidences = evidence_chains.get("经验相关性", [])
+        
+        # 合并优势证据
+        all_strength_evidences = (skill_evidences + exp_evidences)[:3]
+        
+        if not all_strength_evidences:
+            # 如果没有证据，从检测到的动作中生成
+            top_actions = scoring_result.detected_actions[:3]
+            detected_actions = [a.action for a in top_actions]
+            resume_evidence = [a.resume_quote for a in top_actions if a.resume_quote]
+            
+            return {
+                "conclusion": "具备岗位所需的核心能力",
+                "detected_actions": detected_actions,
+                "resume_evidence": resume_evidence[:3],
+                "ai_reasoning": f"从简历中识别出{len(detected_actions)}个关键动作，体现了与岗位要求相关的工作能力"
+            }
+        
+        # 提取动作和证据
+        detected_actions = [ev.get("action", "") for ev in all_strength_evidences if ev.get("action")]
+        resume_evidence = [ev.get("evidence", "") for ev in all_strength_evidences if ev.get("evidence")]
+        reasoning_parts = [ev.get("reasoning", "") for ev in all_strength_evidences if ev.get("reasoning")]
+        
+        # 生成结论
+        if scoring_result.skill_match_score >= 20:
+            conclusion = "核心技能与岗位要求高度匹配"
+        elif scoring_result.experience_match_score >= 18:
+            conclusion = "工作经验与岗位场景高度相关"
+        else:
+            conclusion = "具备岗位所需的基础能力"
+        
+        # 生成推理文本
+        ai_reasoning = f"技能匹配度得分{scoring_result.skill_match_score}分，经验相关性得分{scoring_result.experience_match_score}分。"
+        if reasoning_parts:
+            ai_reasoning += " ".join(reasoning_parts[:2])
+        
+        return {
+            "conclusion": conclusion,
+            "detected_actions": detected_actions[:3],
+            "resume_evidence": resume_evidence[:3],
+            "ai_reasoning": ai_reasoning
+        }
+    
+    def _generate_weaknesses_reasoning_chain(
+        self,
+        scoring_result: ScoringResult,
+        evidence_chains: Dict[str, List[Dict[str, Any]]]
+    ) -> Dict[str, Any]:
+        """
+        生成劣势推理链（Ultra-Format）
+        
+        格式：
+        {
+            "conclusion": str,
+            "resume_gap": [str],
+            "compare_to_jd": str,
+            "ai_reasoning": str
+        }
+        """
+        # 找出最低分维度
+        scores = {
+            "技能匹配度": scoring_result.skill_match_score,
+            "经验相关性": scoring_result.experience_match_score,
+            "成长潜力": scoring_result.growth_potential_score,
+            "稳定性": scoring_result.stability_score,
+        }
+        
+        lowest_dim = min(scores.items(), key=lambda x: x[1])[0]
+        lowest_score = scores[lowest_dim]
+        
+        # 从最低分维度提取证据
+        lowest_evidences = evidence_chains.get(lowest_dim, [])
+        
+        # 提取gap（缺失的能力或经验）
+        resume_gap = []
+        if lowest_dim == "技能匹配度":
+            resume_gap.append("核心技能与岗位要求存在差距")
+        elif lowest_dim == "经验相关性":
+            resume_gap.append("工作经验与岗位场景匹配度不足")
+        elif lowest_dim == "成长潜力":
+            resume_gap.append("学习成长能力有待提升")
+        else:
+            resume_gap.append("工作稳定性存在风险")
+        
+        # 从证据中提取更多gap信息
+        if lowest_evidences:
+            for ev in lowest_evidences[:2]:
+                if ev.get("reasoning"):
+                    gap_text = ev.get("reasoning", "").replace("该动作体现了", "").replace("相关能力", "")
+                    if gap_text and gap_text not in resume_gap:
+                        resume_gap.append(gap_text)
+        
+        # 生成对比JD的文本
+        compare_to_jd = f"岗位要求{lowest_dim}，但候选人该维度得分仅{lowest_score}分"
+        
+        # 生成推理文本
+        ai_reasoning = f"{lowest_dim}得分较低（{lowest_score}分），"
+        if lowest_score < 10:
+            ai_reasoning += "与岗位要求存在较大差距，建议面试时重点考察相关能力。"
+        elif lowest_score < 15:
+            ai_reasoning += "存在一定不足，建议进一步了解候选人的相关经验。"
+        else:
+            ai_reasoning += "基本符合要求，但仍有提升空间。"
+        
+        # 生成结论
+        if lowest_score < 10:
+            conclusion = f"{lowest_dim}明显不足"
+        elif lowest_score < 15:
+            conclusion = f"{lowest_dim}存在不足"
+        else:
+            conclusion = f"{lowest_dim}有待提升"
+        
+        return {
+            "conclusion": conclusion,
+            "resume_gap": resume_gap[:3],
+            "compare_to_jd": compare_to_jd,
+            "ai_reasoning": ai_reasoning
+        }
     
     def _build_error_response(self, scoring_result: ScoringResult) -> Dict[str, Any]:
         """构建错误响应"""
@@ -270,15 +436,29 @@ class UltraScoringEngine:
             "ai_evaluation": ai_review,
             "ai_review": ai_review,
             "highlight_tags": highlight_tags,
+            "persona_tags": highlight_tags,  # Ultra-Format标准字段名
             "highlights": highlight_tags,  # 兼容字段
             "ai_resume_summary": "简历信息不足，无法生成详细摘要",
             "summary_short": "简历信息不足，无法生成详细摘要",
+            "resume_mini": "简历信息不足，无法生成详细摘要",
             "evidence_text": "暂无有效证据",
             "evidence_chains": {},
             "weak_points": ["简历信息不足，建议进一步了解候选人情况"],
             "risks": [{"risk_type": "信息不足", "evidence": error_message, "reason": "无法完成完整评估"}],
             "match_level": "无法评估",
             "match_summary": error_message,
+            "strengths_reasoning_chain": {
+                "conclusion": "无法评估",
+                "detected_actions": [],
+                "resume_evidence": [],
+                "ai_reasoning": error_message
+            },
+            "weaknesses_reasoning_chain": {
+                "conclusion": "信息不足",
+                "resume_gap": ["简历信息不足"],
+                "compare_to_jd": "无法对比",
+                "ai_reasoning": error_message
+            },
             "error_code": scoring_result.error_code,
             "error_message": error_message,
             "score_dims": {

@@ -100,10 +100,15 @@ class FieldGenerators:
                     if len(unique_sentences) >= 5:
                         break
         
-        # 格式化输出（确保每条都有换行）
+        # 格式化输出（确保每条都有换行，清理重复内容）
         if unique_sentences:
             for i, sent in enumerate(unique_sentences[:5], 1):
-                evidence_text += f"\n{i}. {sent}"
+                # 清理句子：移除多余空格，确保格式统一
+                clean_sent = re.sub(r'\s+', ' ', sent.strip())
+                # 确保句子以句号结尾（如果没有标点）
+                if clean_sent and not re.search(r'[。！？]$', clean_sent):
+                    clean_sent += "。"
+                evidence_text += f"\n{i}. {clean_sent}"
         else:
             evidence_text += "\n暂无有效证据"
         
@@ -126,48 +131,51 @@ class FieldGenerators:
             "成长潜力": scoring_result.growth_potential_score,
         }
         
-        reasoning = "【推理】"
+        reasoning = "【推理】\n"
         
-        # 逻辑树：分析各维度得分原因
+        # 逻辑树：分析各维度得分原因（分段显示，避免过长）
         sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         
-        # 分析最高分维度
+        # 分析最高分维度（独立段落）
         highest_dim, highest_score = sorted_scores[0]
         if highest_score >= 20:
-            reasoning += f"{highest_dim}得分较高（{highest_score}分），"
+            reasoning += f"{highest_dim}得分较高（{highest_score}分）。"
             if highest_dim == "技能匹配度":
-                reasoning += "核心技能与岗位要求高度匹配，"
+                reasoning += "核心技能与岗位要求高度匹配。"
             elif highest_dim == "经验相关性":
-                reasoning += "工作经验与岗位场景高度相关，"
+                reasoning += "工作经验与岗位场景高度相关。"
             elif highest_dim == "成长潜力":
-                reasoning += "学习成长能力突出，"
+                reasoning += "学习成长能力突出。"
             else:
-                reasoning += "工作稳定性良好，"
+                reasoning += "工作稳定性良好。"
+            reasoning += "\n"
         
-        # 分析最低分维度
+        # 分析最低分维度（独立段落）
         lowest_dim, lowest_score = sorted_scores[-1]
         if lowest_score < 15:
-            reasoning += f"{lowest_dim}得分较低（{lowest_score}分），"
+            reasoning += f"{lowest_dim}得分较低（{lowest_score}分）。"
             if lowest_dim == "技能匹配度":
-                reasoning += "核心技能与岗位要求存在差距，"
+                reasoning += "核心技能与岗位要求存在差距。"
             elif lowest_dim == "经验相关性":
-                reasoning += "工作经验与岗位场景匹配度不足，"
+                reasoning += "工作经验与岗位场景匹配度不足。"
             elif lowest_dim == "成长潜力":
-                reasoning += "学习成长能力有待提升，"
+                reasoning += "学习成长能力有待提升。"
             else:
-                reasoning += "工作稳定性存在风险，"
+                reasoning += "工作稳定性存在风险。"
+            reasoning += "\n"
         
-        # 成长潜力 vs 经验匹配的平衡
+        # 成长潜力 vs 经验匹配的平衡（独立段落）
         growth_exp_diff = scoring_result.growth_potential_score - scoring_result.experience_match_score
         if abs(growth_exp_diff) > 5:
             if growth_exp_diff > 0:
-                reasoning += "成长潜力高于经验匹配，更适合培养型岗位；"
+                reasoning += "成长潜力高于经验匹配，更适合培养型岗位。"
             else:
-                reasoning += "经验匹配高于成长潜力，更适合即战力岗位；"
+                reasoning += "经验匹配高于成长潜力，更适合即战力岗位。"
         else:
-            reasoning += "成长潜力与经验匹配较为均衡；"
+            reasoning += "成长潜力与经验匹配较为均衡。"
+        reasoning += "\n"
         
-        # 综合判断
+        # 综合判断（独立段落）
         if scoring_result.final_score >= 75:
             reasoning += "综合能力较强，具备岗位所需的核心素质。"
         elif scoring_result.final_score >= 60:
@@ -175,7 +183,7 @@ class FieldGenerators:
         else:
             reasoning += "综合能力较弱，与岗位要求存在较大差距。"
         
-        return reasoning
+        return reasoning.strip()
     
     def _build_conclusion_section(self, final_score: float) -> str:
         """

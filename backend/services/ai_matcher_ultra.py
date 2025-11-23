@@ -58,8 +58,18 @@ def ai_score_one_ultra(jd_text: str, resume_text: str, job_title: str = "") -> D
         # 确保保留所有Ultra原始字段（用于前端直接读取）
         # 这些字段会被直接传递到DataFrame，前端可以优先使用
         
+        # 确保Ultra-Format标准字段存在
+        if "persona_tags" not in result:
+            result["persona_tags"] = result.get("highlight_tags", [])
+        if "strengths_reasoning_chain" not in result:
+            result["strengths_reasoning_chain"] = {}
+        if "weaknesses_reasoning_chain" not in result:
+            result["weaknesses_reasoning_chain"] = {}
+        if "resume_mini" not in result:
+            result["resume_mini"] = result.get("summary_short", "") or result.get("ai_resume_summary", "")
+        
         # 调试：输出关键字段状态
-        print(f"[DEBUG] Ultra字段状态: ai_review={bool(result.get('ai_review'))}, highlight_tags={len(result.get('highlight_tags', []))}, ai_resume_summary={bool(result.get('ai_resume_summary'))}")
+        print(f"[DEBUG] Ultra字段状态: ai_review={bool(result.get('ai_review'))}, highlight_tags={len(result.get('highlight_tags', []))}, persona_tags={len(result.get('persona_tags', []))}, strengths_chain={bool(result.get('strengths_reasoning_chain'))}, weaknesses_chain={bool(result.get('weaknesses_reasoning_chain'))}")
         
         return result
     except Exception as e:
@@ -163,14 +173,22 @@ def ai_match_resumes_df_ultra(jd_text: str, resumes_df: pd.DataFrame, job_title:
             "ai_evaluation": score_result.get("ai_evaluation", ""),
             "ai_review": score_result.get("ai_review", "") or score_result.get("ai_evaluation", ""),
             "highlight_tags": highlight_tags,  # 列表格式
+            "persona_tags": score_result.get("persona_tags", highlight_tags),  # Ultra-Format标准字段
             "summary_short": score_result.get("summary_short", ""),
             "ai_resume_summary": score_result.get("ai_resume_summary", "") or score_result.get("summary_short", ""),
+            "resume_mini": score_result.get("resume_mini", "") or score_result.get("summary_short", "") or score_result.get("ai_resume_summary", ""),
             "evidence_chains": score_result.get("evidence_chains", {}),
             "evidence_text": score_result.get("evidence_text", ""),
             "weak_points": weak_points,  # 列表格式
             "score_dims": score_dims,  # 雷达图数据
             "risks": risks,  # 风险项列表
             "match_level": score_result.get("match_level", "无法评估"),
+            "match_summary": score_result.get("match_summary", "") or score_result.get("match_level", "无法评估"),
+            # Ultra-Format推理链（必须字段）
+            "strengths_reasoning_chain": score_result.get("strengths_reasoning_chain", {}),
+            "weaknesses_reasoning_chain": score_result.get("weaknesses_reasoning_chain", {}),
+            # Ultra-Format score_detail
+            "score_detail": score_result.get("score_detail", {}),
         })
         
         scored_rows.append(enriched)
