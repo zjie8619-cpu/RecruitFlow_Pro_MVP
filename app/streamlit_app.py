@@ -999,11 +999,30 @@ with tab2:
                 else:
                     # 获取岗位名称，用于岗位级清洗逻辑
                     job_title = st.session_state.get("job_name", "")
+                    # 添加日志查看器（用于调试）
+                    with st.expander("🔍 调试日志（点击查看后端日志）", expanded=False):
+                        st.info("💡 Python的print()输出在运行Streamlit的终端/控制台中，不在浏览器控制台。")
+                        st.info("💡 请查看启动Streamlit的终端窗口，应该能看到 [DEBUG] 开头的日志。")
+                        st.code("""
+示例日志格式：
+[DEBUG] ai_match_resumes_df_ultra: 开始批量匹配，共2份简历
+[DEBUG] 简历1/2: 开始评分，文本长度=XXX
+[DEBUG] Ultra引擎.score() 开始: resume_length=XXX
+[DEBUG] S2: 开始动作识别...
+[DEBUG] S9: 构建证据链完成，evidence_chain数量=X
+[DEBUG] 简历1/2: 评分完成，ai_review=True, highlight_tags=X
+                        """, language="text")
+                    
                     with st.spinner("AI 正在智能分析匹配度（Ultra引擎），请稍候…"):
                         # 优先使用Ultra版评分引擎
                         try:
                             scored_df = ai_match_resumes_df_ultra(jd_text, resumes_df, job_title)
                         except Exception as e:
+                            import traceback
+                            error_trace = traceback.format_exc()
+                            st.error(f"❌ Ultra引擎异常: {str(e)}")
+                            with st.expander("查看详细错误信息"):
+                                st.code(error_trace, language="python")
                             st.warning(f"Ultra引擎失败，回退到标准版本: {str(e)[:100]}")
                             scored_df = ai_match_resumes_df(jd_text, resumes_df, job_title)
                     # 确保所有必需字段存在（优先使用Ultra字段，兼容旧字段）
