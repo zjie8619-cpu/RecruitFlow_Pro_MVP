@@ -124,15 +124,20 @@ def ai_match_resumes_df_ultra(jd_text: str, resumes_df: pd.DataFrame, job_title:
         return pd.DataFrame()
     
     scored_rows = []
+    total_count = len(resumes_df)
+    print(f"[DEBUG] ai_match_resumes_df_ultra: 开始批量匹配，共{total_count}份简历")
     
-    for _, row in resumes_df.iterrows():
+    for idx, (_, row) in enumerate(resumes_df.iterrows(), 1):
         resume_text = str(row.get("resume_text", "") or row.get("text_raw", "") or "")
         
         if not resume_text.strip():
+            print(f"[DEBUG] 简历{idx}/{total_count}: 文本为空，跳过")
             continue
         
+        print(f"[DEBUG] 简历{idx}/{total_count}: 开始评分，文本长度={len(resume_text)}")
         # 使用Ultra引擎评分
         score_result = ai_score_one_ultra(jd_text, resume_text, job_title)
+        print(f"[DEBUG] 简历{idx}/{total_count}: 评分完成，ai_review={bool(score_result.get('ai_review'))}, highlight_tags={len(score_result.get('highlight_tags', []))}, evidence_chains={len(score_result.get('evidence_chains', {}))}")
         
         # 合并到原始行数据（包含Ultra字段）
         enriched = row.to_dict()
@@ -210,10 +215,19 @@ def ai_match_resumes_df_ultra(jd_text: str, resumes_df: pd.DataFrame, job_title:
         scored_rows.append(enriched)
     
     result = pd.DataFrame(scored_rows)
+    print(f"[DEBUG] ai_match_resumes_df_ultra: 批量匹配完成，共处理{len(scored_rows)}份简历")
     
     # 按总分排序
     if "总分" in result.columns:
         result = result.sort_values(by="总分", ascending=False).reset_index(drop=True)
+    
+    # 检查结果字段
+    if len(result) > 0:
+        sample_row = result.iloc[0]
+        print(f"[DEBUG] 结果样本检查:")
+        print(f"  - ai_review: {bool(sample_row.get('ai_review'))}")
+        print(f"  - highlight_tags: {len(sample_row.get('highlight_tags', []))}")
+        print(f"  - evidence_chains: {len(sample_row.get('evidence_chains', {}))}")
     
     return result
 
