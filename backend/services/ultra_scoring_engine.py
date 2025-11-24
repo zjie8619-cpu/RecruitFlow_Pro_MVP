@@ -25,16 +25,19 @@ class UltraScoringEngine:
         
         返回完整的评分结果字典
         """
-        print(f"[DEBUG] Ultra引擎.score() 开始: resume_length={len(resume_text)}")
+        import sys
+        print(f"[DEBUG] Ultra引擎.score() 开始: resume_length={len(resume_text)}", flush=True)
+        sys.stdout.flush()
         
         # 执行评分推理（S1-S9）
         scoring_result = self.scoring_graph.execute(resume_text)
         
-        print(f"[DEBUG] ScoringGraph.execute() 完成:")
-        print(f"  - error_code: {scoring_result.error_code}")
-        print(f"  - detected_actions数量: {len(scoring_result.detected_actions)}")
-        print(f"  - evidence_chain数量: {len(scoring_result.evidence_chain)}")
-        print(f"  - final_score: {scoring_result.final_score}")
+        print(f"[DEBUG] ScoringGraph.execute() 完成:", flush=True)
+        print(f"  - error_code: {scoring_result.error_code}", flush=True)
+        print(f"  - detected_actions数量: {len(scoring_result.detected_actions)}", flush=True)
+        print(f"  - evidence_chain数量: {len(scoring_result.evidence_chain)}", flush=True)
+        print(f"  - final_score: {scoring_result.final_score}", flush=True)
+        sys.stdout.flush()
         
         # 即使有错误，也尝试生成基本字段（避免回退到旧版本）
         has_error = bool(scoring_result.error_code)
@@ -112,9 +115,11 @@ class UltraScoringEngine:
             evidence_text = "暂无有效证据"
         
         # 构建证据链字典（Ultra-Format）
+        import sys
         evidence_chains = {}
         dimension_order = ["技能匹配度", "经验相关性", "成长潜力", "稳定性"]
-        print(f"[DEBUG] 构建evidence_chains: evidence_chain长度={len(scoring_result.evidence_chain)}")
+        print(f"[DEBUG] 构建evidence_chains: evidence_chain长度={len(scoring_result.evidence_chain)}", flush=True)
+        sys.stdout.flush()
         for dim in dimension_order:
             dim_evidences = [
                 {
@@ -127,9 +132,11 @@ class UltraScoringEngine:
             ][:3]  # 每个维度最多3条
             if dim_evidences:
                 evidence_chains[dim] = dim_evidences
-                print(f"[DEBUG]   - {dim}: {len(dim_evidences)}条证据")
+                print(f"[DEBUG]   - {dim}: {len(dim_evidences)}条证据", flush=True)
+                sys.stdout.flush()
         
-        print(f"[DEBUG] evidence_chains最终结果: {len(evidence_chains)}个维度有数据")
+        print(f"[DEBUG] evidence_chains最终结果: {len(evidence_chains)}个维度有数据", flush=True)
+        sys.stdout.flush()
         
         # 生成优势推理链（Ultra-Format）
         strengths_reasoning_chain = self._generate_strengths_reasoning_chain(

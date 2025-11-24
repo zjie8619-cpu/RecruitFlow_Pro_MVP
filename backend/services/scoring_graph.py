@@ -102,10 +102,13 @@ class ScoringGraph:
                 # 不返回，继续执行后续步骤
             
             # S2: 动作识别
-            print(f"[DEBUG] S2: 开始动作识别，cleaned_text长度={len(cleaned_text)}")
+            import sys
+            print(f"[DEBUG] S2: 开始动作识别，cleaned_text长度={len(cleaned_text)}", flush=True)
+            sys.stdout.flush()
             detected_actions = self._step2_detect_actions(cleaned_text)
             result.detected_actions = detected_actions
-            print(f"[DEBUG] S2: 动作识别完成，detected_actions数量={len(detected_actions)}")
+            print(f"[DEBUG] S2: 动作识别完成，detected_actions数量={len(detected_actions)}", flush=True)
+            sys.stdout.flush()
             
             # 如果动作过少，仍然继续处理，但标记为警告
             if len(detected_actions) < 2:
@@ -116,21 +119,28 @@ class ScoringGraph:
                 # 不再提前返回，让后续步骤生成默认的evidence_chain等字段
             
             # S3: 能力维度归类
-            print(f"[DEBUG] S3: 开始能力维度归类，detected_actions数量={len(detected_actions)}")
+            import sys
+            print(f"[DEBUG] S3: 开始能力维度归类，detected_actions数量={len(detected_actions)}", flush=True)
+            sys.stdout.flush()
             ability_mapping = self._step3_map_abilities(detected_actions)
-            print(f"[DEBUG] S3: 能力维度归类完成，ability_mapping数量={len(ability_mapping)}")
+            print(f"[DEBUG] S3: 能力维度归类完成，ability_mapping数量={len(ability_mapping)}", flush=True)
+            sys.stdout.flush()
             
             # S4: 权重模型（岗位可切换）
-            print(f"[DEBUG] S4: 开始权重模型计算")
+            print(f"[DEBUG] S4: 开始权重模型计算", flush=True)
+            sys.stdout.flush()
             weight_matrix = self._step4_weight_matrix()
-            print(f"[DEBUG] S4: 权重模型计算完成")
+            print(f"[DEBUG] S4: 权重模型计算完成", flush=True)
+            sys.stdout.flush()
             
             # S5: 分数计算
-            print(f"[DEBUG] S5: 开始分数计算")
+            print(f"[DEBUG] S5: 开始分数计算", flush=True)
+            sys.stdout.flush()
             dimension_scores = self._step5_calculate_scores(
                 detected_actions, ability_mapping, weight_matrix
             )
-            print(f"[DEBUG] S5: 分数计算完成: {dimension_scores}")
+            print(f"[DEBUG] S5: 分数计算完成: {dimension_scores}", flush=True)
+            sys.stdout.flush()
             result.skill_match_score = dimension_scores["skill_match"]
             result.experience_match_score = dimension_scores["experience_match"]
             result.stability_score = dimension_scores["stability"]
@@ -138,32 +148,41 @@ class ScoringGraph:
             result.final_score = sum(dimension_scores.values())
             
             # S6: 风险识别
-            print(f"[DEBUG] S6: 开始风险识别")
+            import sys
+            print(f"[DEBUG] S6: 开始风险识别", flush=True)
+            sys.stdout.flush()
             risks = self._step6_identify_risks(cleaned_text, detected_actions, dimension_scores)
             result.risks = risks
-            print(f"[DEBUG] S6: 风险识别完成，risks数量={len(risks)}")
+            print(f"[DEBUG] S6: 风险识别完成，risks数量={len(risks)}", flush=True)
+            sys.stdout.flush()
             
             # S7: 职业契合度判断
-            print(f"[DEBUG] S7: 开始职业契合度判断")
+            print(f"[DEBUG] S7: 开始职业契合度判断", flush=True)
+            sys.stdout.flush()
             match_level = self._step7_match_level(result.final_score, risks)
             result.match_level = match_level
-            print(f"[DEBUG] S7: 职业契合度判断完成: {match_level}")
+            print(f"[DEBUG] S7: 职业契合度判断完成: {match_level}", flush=True)
+            sys.stdout.flush()
             
             # S8: 生成解释
-            print(f"[DEBUG] S8: 开始生成解释")
+            print(f"[DEBUG] S8: 开始生成解释", flush=True)
+            sys.stdout.flush()
             explanations = self._step8_generate_explanations(
                 dimension_scores, detected_actions, ability_mapping, risks
             )
             result.score_explanation = explanations
-            print(f"[DEBUG] S8: 生成解释完成")
+            print(f"[DEBUG] S8: 生成解释完成", flush=True)
+            sys.stdout.flush()
             
             # S9: 构建证据链
-            print(f"[DEBUG] S9: 开始构建证据链")
+            print(f"[DEBUG] S9: 开始构建证据链", flush=True)
+            sys.stdout.flush()
             evidence_chain = self._step9_build_evidence_chain(
                 detected_actions, ability_mapping, dimension_scores
             )
             result.evidence_chain = evidence_chain
-            print(f"[DEBUG] S9: 构建证据链完成，evidence_chain数量={len(evidence_chain)}")
+            print(f"[DEBUG] S9: 构建证据链完成，evidence_chain数量={len(evidence_chain)}", flush=True)
+            sys.stdout.flush()
             
         except Exception as e:
             import traceback
@@ -184,7 +203,9 @@ class ScoringGraph:
                     )
                 ]
         
-        print(f"[DEBUG] ScoringGraph.execute() 最终返回: evidence_chain数量={len(result.evidence_chain)}, final_score={result.final_score}")
+        import sys
+        print(f"[DEBUG] ScoringGraph.execute() 最终返回: evidence_chain数量={len(result.evidence_chain)}, final_score={result.final_score}", flush=True)
+        sys.stdout.flush()
         return result
     
     def _step1_clean_text(self, resume_text: str) -> Tuple[str, ParsingResult]:

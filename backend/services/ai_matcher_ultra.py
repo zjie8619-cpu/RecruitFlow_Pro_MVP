@@ -16,35 +16,45 @@ def ai_score_one_ultra(jd_text: str, resume_text: str, job_title: str = "") -> D
     """
     try:
         import time
+        import sys
         start_time = time.time()
-        print(f"[DEBUG] >>> 开始Ultra引擎评分: job_title={job_title}, resume_length={len(resume_text)}")
+        # 强制刷新输出，确保日志立即显示
+        print(f"[DEBUG] >>> 开始Ultra引擎评分: job_title={job_title}, resume_length={len(resume_text)}", flush=True)
+        sys.stdout.flush()
         
         engine = UltraScoringEngine(job_title, jd_text)
         result = engine.score(resume_text)
         
         elapsed_time = time.time() - start_time
-        print(f"[DEBUG] >>> Ultra引擎评分完成，耗时: {elapsed_time:.2f}秒")
+        print(f"[DEBUG] >>> Ultra引擎评分完成，耗时: {elapsed_time:.2f}秒", flush=True)
+        sys.stdout.flush()
         
-        # 调试：输出原始结果的关键字段
-        print(f"[DEBUG] >>> RAW ULTRA RESULT:")
-        print(f"  - error_code: {result.get('error_code')}")
-        print(f"  - 总分: {result.get('总分', 0)}")
-        print(f"  - ai_review存在: {bool(result.get('ai_review'))}")
-        print(f"  - highlight_tags数量: {len(result.get('highlight_tags', []))}")
-        print(f"  - evidence_chain数量: {len(result.get('evidence_chains', {}))}")
-        print(f"  - detected_actions_count: {result.get('detected_actions_count', 0)}")
+        # 调试：输出原始结果的关键字段（强制刷新）
+        import sys
+        print(f"[DEBUG] >>> RAW ULTRA RESULT:", flush=True)
+        print(f"  - error_code: {result.get('error_code')}", flush=True)
+        print(f"  - 总分: {result.get('总分', 0)}", flush=True)
+        print(f"  - ai_review存在: {bool(result.get('ai_review'))}", flush=True)
+        print(f"  - highlight_tags数量: {len(result.get('highlight_tags', []))}", flush=True)
+        print(f"  - evidence_chain数量: {len(result.get('evidence_chains', {}))}", flush=True)
+        print(f"  - detected_actions_count: {result.get('detected_actions_count', 0)}", flush=True)
+        sys.stdout.flush()
         
         # 调试：检查是否有错误
         if result.get("error_code"):
-            print(f"[WARNING] Ultra引擎返回错误: {result.get('error_code')} - {result.get('error_message')}")
+            print(f"[WARNING] Ultra引擎返回错误: {result.get('error_code')} - {result.get('error_message')}", flush=True)
+            sys.stdout.flush()
         
         # 调试：检查关键字段是否存在
         if not result.get("ai_review") and not result.get("ai_evaluation"):
-            print(f"[WARNING] Ultra引擎未生成ai_review或ai_evaluation")
+            print(f"[WARNING] Ultra引擎未生成ai_review或ai_evaluation", flush=True)
+            sys.stdout.flush()
         if not result.get("highlight_tags"):
-            print(f"[WARNING] Ultra引擎未生成highlight_tags")
+            print(f"[WARNING] Ultra引擎未生成highlight_tags", flush=True)
+            sys.stdout.flush()
         if not result.get("ai_resume_summary") and not result.get("summary_short"):
-            print(f"[WARNING] Ultra引擎未生成ai_resume_summary或summary_short")
+            print(f"[WARNING] Ultra引擎未生成ai_resume_summary或summary_short", flush=True)
+            sys.stdout.flush()
         
         # 转换为兼容格式（确保字段映射正确）
         # 1. AI评价：优先使用 ai_review，其次 ai_evaluation
@@ -125,19 +135,29 @@ def ai_match_resumes_df_ultra(jd_text: str, resumes_df: pd.DataFrame, job_title:
     
     scored_rows = []
     total_count = len(resumes_df)
-    print(f"[DEBUG] ai_match_resumes_df_ultra: 开始批量匹配，共{total_count}份简历")
+    import sys
+    print(f"[DEBUG] ========================================", flush=True)
+    print(f"[DEBUG] ai_match_resumes_df_ultra: 开始批量匹配，共{total_count}份简历", flush=True)
+    print(f"[DEBUG] ========================================", flush=True)
+    sys.stdout.flush()
     
     for idx, (_, row) in enumerate(resumes_df.iterrows(), 1):
         resume_text = str(row.get("resume_text", "") or row.get("text_raw", "") or "")
         
         if not resume_text.strip():
-            print(f"[DEBUG] 简历{idx}/{total_count}: 文本为空，跳过")
+            print(f"[DEBUG] 简历{idx}/{total_count}: 文本为空，跳过", flush=True)
+            sys.stdout.flush()
             continue
         
-        print(f"[DEBUG] 简历{idx}/{total_count}: 开始评分，文本长度={len(resume_text)}")
+        print(f"[DEBUG] --- 简历{idx}/{total_count}: 开始评分，文本长度={len(resume_text)} ---", flush=True)
+        sys.stdout.flush()
         # 使用Ultra引擎评分
         score_result = ai_score_one_ultra(jd_text, resume_text, job_title)
-        print(f"[DEBUG] 简历{idx}/{total_count}: 评分完成，ai_review={bool(score_result.get('ai_review'))}, highlight_tags={len(score_result.get('highlight_tags', []))}, evidence_chains={len(score_result.get('evidence_chains', {}))}")
+        print(f"[DEBUG] --- 简历{idx}/{total_count}: 评分完成 ---", flush=True)
+        print(f"[DEBUG]   ai_review={bool(score_result.get('ai_review'))}", flush=True)
+        print(f"[DEBUG]   highlight_tags={len(score_result.get('highlight_tags', []))}", flush=True)
+        print(f"[DEBUG]   evidence_chains={len(score_result.get('evidence_chains', {}))}", flush=True)
+        sys.stdout.flush()
         
         # 合并到原始行数据（包含Ultra字段）
         enriched = row.to_dict()
@@ -215,7 +235,11 @@ def ai_match_resumes_df_ultra(jd_text: str, resumes_df: pd.DataFrame, job_title:
         scored_rows.append(enriched)
     
     result = pd.DataFrame(scored_rows)
-    print(f"[DEBUG] ai_match_resumes_df_ultra: 批量匹配完成，共处理{len(scored_rows)}份简历")
+    import sys
+    print(f"[DEBUG] ========================================", flush=True)
+    print(f"[DEBUG] ai_match_resumes_df_ultra: 批量匹配完成，共处理{len(scored_rows)}份简历", flush=True)
+    print(f"[DEBUG] ========================================", flush=True)
+    sys.stdout.flush()
     
     # 按总分排序
     if "总分" in result.columns:
@@ -224,10 +248,11 @@ def ai_match_resumes_df_ultra(jd_text: str, resumes_df: pd.DataFrame, job_title:
     # 检查结果字段
     if len(result) > 0:
         sample_row = result.iloc[0]
-        print(f"[DEBUG] 结果样本检查:")
-        print(f"  - ai_review: {bool(sample_row.get('ai_review'))}")
-        print(f"  - highlight_tags: {len(sample_row.get('highlight_tags', []))}")
-        print(f"  - evidence_chains: {len(sample_row.get('evidence_chains', {}))}")
+        print(f"[DEBUG] 结果样本检查:", flush=True)
+        print(f"  - ai_review: {bool(sample_row.get('ai_review'))}", flush=True)
+        print(f"  - highlight_tags: {len(sample_row.get('highlight_tags', []))}", flush=True)
+        print(f"  - evidence_chains: {len(sample_row.get('evidence_chains', {}))}", flush=True)
+        sys.stdout.flush()
     
     return result
 
