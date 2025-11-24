@@ -89,10 +89,17 @@ class ScoringGraph:
         try:
             # S1: 简历文本清洗
             cleaned_text, parse_result = self._step1_clean_text(resume_text)
-            if parse_result.error_code:
+            # 即使有错误码，也继续处理（只是标记为警告）
+            # 只有严重错误（如完全空内容）才提前返回
+            if parse_result.error_code == "EMPTY_CONTENT":
                 result.error_code = parse_result.error_code
                 result.error_message = parse_result.error_message
                 return result
+            # 其他错误（如文本过短、图片内容等）只标记为警告，继续处理
+            if parse_result.error_code:
+                result.error_code = parse_result.error_code
+                result.error_message = parse_result.error_message
+                # 不返回，继续执行后续步骤
             
             # S2: 动作识别
             detected_actions = self._step2_detect_actions(cleaned_text)
@@ -103,16 +110,8 @@ class ScoringGraph:
                 # 不直接返回错误，而是继续处理，但会在最终结果中标记
                 result.error_code = "INSUFFICIENT_ACTIONS"
                 result.error_message = "简历中检测到的动作过少，评分可能不够准确"
-                # 继续执行后续步骤，使用默认值
-                if len(detected_actions) == 0:
-                    # 如果完全没有动作，给一个默认分数
-                    result.skill_match_score = 10.0
-                    result.experience_match_score = 10.0
-                    result.stability_score = 10.0
-                    result.growth_potential_score = 10.0
-                    result.final_score = 40.0
-                    result.match_level = "无法评估"
-                    return result
+                # 即使没有动作，也继续执行后续步骤，生成基本字段
+                # 不再提前返回，让后续步骤生成默认的evidence_chain等字段
             
             # S3: 能力维度归类
             ability_mapping = self._step3_map_abilities(detected_actions)
@@ -348,6 +347,9 @@ class ScoringGraph:
             # 每个核心能力最多贡献5分
             skill_score += min(5.0, count * 1.5)
         skill_score = min(25.0, skill_score)
+        # 如果没有动作，给一个默认分数
+        if len(actions) == 0:
+            skill_score = 10.0
         scores["skill_match"] = round(skill_score, 1)
         
         # 经验相关性（0-25）：与岗位JD关键场景匹配程度
@@ -367,6 +369,9 @@ class ScoringGraph:
                     break
         
         exp_score = min(25.0, (match_count * 2.0) + (len(actions) * 0.8))
+        # 如果没有动作，给一个默认分数
+        if len(actions) == 0:
+            exp_score = 10.0
         scores["experience_match"] = round(exp_score, 1)
         
         # 稳定性（0-25）：岗位跨度 + 在职时长 + 跳槽频率
@@ -398,6 +403,9 @@ class ScoringGraph:
         growth_indicators_count = sum(1 for action in actions if any(ind in action.sentence for ind in growth_indicators))
         
         growth_score = min(25.0, (growth_count * 2.5) + (growth_indicators_count * 1.5) + (len(actions) > 8) * 3.0)
+        # 如果没有动作，给一个默认分数
+        if len(actions) == 0:
+            growth_score = 10.0
         scores["growth_potential"] = round(growth_score, 1)
         
         return scores
@@ -544,8 +552,30 @@ class ScoringGraph:
                     reasoning=reasoning,
                     score_contribution=scores[dim_key] / max(len(relevant_actions), 1)
                 ))
+            
+            # 如果没有动作，为每个维度生成一个默认证据项
+            if len(relevant_actions) == 0 and len(actions) == 0:
+                default_reasoning = self._generate_default_reasoning(dim_name, dim_key, scores)
+                evidence_chain.append(EvidenceItem(
+                    dimension=dim_name,
+                    action="简历信息不足",
+                    resume_quote="简历中未检测到相关动作，建议进一步了解候选人情况",
+                    reasoning=default_reasoning,
+                    score_contribution=scores[dim_key]
+                ))
         
         return evidence_chain
+    
+    def _generate_default_reasoning(self, dim_name: str, dim_key: str, scores: Dict[str, float]) -> str:
+        """生成默认推理文本（当没有动作时）"""
+        if dim_key == "skill_match":
+            return f"技能匹配度得分{scores[dim_key]}分，简历信息不足，建议面试时重点考察核心技能"
+        elif dim_key == "experience_match":
+            return f"经验相关性得分{scores[dim_key]}分，简历信息不足，建议面试时深入了解工作经验"
+        elif dim_key == "growth_potential":
+            return f"成长潜力得分{scores[dim_key]}分，简历信息不足，建议面试时了解学习成长情况"
+        else:
+            return f"稳定性得分{scores[dim_key]}分，简历信息不足，建议面试时确认工作稳定性"
     
     def _generate_evidence_reasoning(
         self,

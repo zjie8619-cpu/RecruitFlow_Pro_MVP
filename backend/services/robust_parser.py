@@ -23,7 +23,7 @@ class ParsingResult:
 class RobustParser:
     """健壮的文本解析器"""
     
-    MIN_TEXT_LENGTH = 300  # 最小文本长度
+    MIN_TEXT_LENGTH = 100  # 最小文本长度（降低阈值，避免误判正常简历）
     
     # 不相关岗位关键词（用于检测岗位不匹配）
     IRRELEVANT_JOBS = [
@@ -49,19 +49,19 @@ class RobustParser:
         result.text_length = len(cleaned)
         result.has_content = len(cleaned.strip()) > 0
         
-        # 检查文本长度
+        # 检查文本长度（改为警告，不阻止处理）
         if result.text_length < self.MIN_TEXT_LENGTH:
             result.error_code = "TEXT_TOO_SHORT"
             result.error_message = f"简历文本过短（{result.text_length}字），建议至少{self.MIN_TEXT_LENGTH}字"
-            result.is_valid = False
-            return result
+            # 不设置 is_valid = False，允许继续处理（只是警告）
+            # 这样即使文本较短，也能进行基本评分
         
         # 检查是否包含图片标记（OCR结果通常会有特殊标记）
+        # 改为警告，不阻止处理
         if self._is_image_content(cleaned):
             result.error_code = "IMAGE_CONTENT"
             result.error_message = "检测到图片内容，文本提取可能不完整"
-            result.is_valid = False
-            return result
+            # 不设置 is_valid = False，允许继续处理（只是警告）
         
         # 检查岗位相关性
         if self._is_irrelevant_job(cleaned):

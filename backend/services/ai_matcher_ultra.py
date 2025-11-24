@@ -15,20 +15,36 @@ def ai_score_one_ultra(jd_text: str, resume_text: str, job_title: str = "") -> D
     使用新的标准化推理框架（S1-S9）和Ultra字段生成器
     """
     try:
+        import time
+        start_time = time.time()
+        print(f"[DEBUG] >>> 开始Ultra引擎评分: job_title={job_title}, resume_length={len(resume_text)}")
+        
         engine = UltraScoringEngine(job_title, jd_text)
         result = engine.score(resume_text)
         
+        elapsed_time = time.time() - start_time
+        print(f"[DEBUG] >>> Ultra引擎评分完成，耗时: {elapsed_time:.2f}秒")
+        
+        # 调试：输出原始结果的关键字段
+        print(f"[DEBUG] >>> RAW ULTRA RESULT:")
+        print(f"  - error_code: {result.get('error_code')}")
+        print(f"  - 总分: {result.get('总分', 0)}")
+        print(f"  - ai_review存在: {bool(result.get('ai_review'))}")
+        print(f"  - highlight_tags数量: {len(result.get('highlight_tags', []))}")
+        print(f"  - evidence_chain数量: {len(result.get('evidence_chains', {}))}")
+        print(f"  - detected_actions_count: {result.get('detected_actions_count', 0)}")
+        
         # 调试：检查是否有错误
         if result.get("error_code"):
-            print(f"[DEBUG] Ultra引擎返回错误: {result.get('error_code')} - {result.get('error_message')}")
+            print(f"[WARNING] Ultra引擎返回错误: {result.get('error_code')} - {result.get('error_message')}")
         
         # 调试：检查关键字段是否存在
         if not result.get("ai_review") and not result.get("ai_evaluation"):
-            print(f"[DEBUG] Ultra引擎未生成ai_review或ai_evaluation")
+            print(f"[WARNING] Ultra引擎未生成ai_review或ai_evaluation")
         if not result.get("highlight_tags"):
-            print(f"[DEBUG] Ultra引擎未生成highlight_tags")
+            print(f"[WARNING] Ultra引擎未生成highlight_tags")
         if not result.get("ai_resume_summary") and not result.get("summary_short"):
-            print(f"[DEBUG] Ultra引擎未生成ai_resume_summary或summary_short")
+            print(f"[WARNING] Ultra引擎未生成ai_resume_summary或summary_short")
         
         # 转换为兼容格式（确保字段映射正确）
         # 1. AI评价：优先使用 ai_review，其次 ai_evaluation
