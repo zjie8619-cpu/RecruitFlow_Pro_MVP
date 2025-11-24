@@ -99,37 +99,100 @@ NAME_PATTERNS = [
 ]
 
 NAME_STOP_WORDS = {
+    # 常见职位/通用词
     "课程顾问",
     "顾问",
     "老师",
     "班主任",
-    "物理竞赛",
-    "数学竞赛",
     "岗位",
     "职位",
     "简历",
     "应聘",
     "求职",
     "个人简历",
-    "教育经历",
-    "教育背景",
-    "工作经历",
-    "项目经历",
-    "联系方式",
-    "联系",
-    "电话",
-    "邮箱",
     "面试",
     "面销",
     "机构",
     "尚德机构",
     "成长经历",
-    "性别",
-    "男",
-    "女",
     "联系方法",
     "联系方式",
     "联系方式：",
+    "联系方式:",
+    "联系人",
+    "联系人信息",
+    # 基础信息字段
+    "性别",
+    "男",
+    "女",
+    "年龄",
+    "年龄段",
+    "生日",
+    "出生年月",
+    "出生日期",
+    "出生年",
+    "身高",
+    "体重",
+    "民族",
+    "籍贯",
+    "户籍",
+    "现居地",
+    "现住址",
+    "家庭住址",
+    "婚姻状况",
+    "政治面貌",
+    "求职意向",
+    "职业目标",
+    # 联系方式字段
+    "电话",
+    "手机",
+    "手机号",
+    "座机",
+    "微信",
+    "微信号",
+    "微信号：",
+    "微信号:",
+    "微信：",
+    "微信:",
+    "QQ",
+    "邮箱",
+    "电子邮箱",
+    # 教育/经历
+    "教育经历",
+    "教育背景",
+    "学历",
+    "最高学历",
+    "大专",
+    "本科",
+    "硕士",
+    "博士",
+    "实习经历",
+    "工作经历",
+    "项目经历",
+    "实习经验",
+    "年经验",
+    "专业资质",
+    # 其他噪声字段
+    "掌握技能",
+    "技能特长",
+    "资格证书",
+    "证书",
+    "荣誉奖项",
+    "兴趣爱好",
+    "自我评价",
+    "亮点",
+    "摘要",
+    "简介",
+    "简述",
+    "特点",
+    "职业标签",
+    "核心竞争力",
+    "优势总结",
+    "责任描述",
+    "掌握语言",
+    "期望薪资",
+    "紧急联系人",
+    "备注",
 }
 
 NAME_DISALLOWED_SUBSTRINGS = {
@@ -174,6 +237,22 @@ NAME_DISALLOWED_SUBSTRINGS = {
     "毕业",
     "大学",
     "学院",
+    "经验",
+    "技能",
+    "证书",
+    "语言",
+    "薪资",
+    "住址",
+    "现居",
+    "邮箱",
+    "电话",
+    "微信",
+    "QQ",
+    "链接",
+    "主页",
+    "网站",
+    "公众号",
+    "教育部",
 }
 
 SUSPICIOUS_NAME_KEYWORDS = {
@@ -253,6 +332,100 @@ NAME_SECTION_MARKERS = [
 ]
 NAME_SECTION_MARKERS_LOWER = [marker.lower() for marker in NAME_SECTION_MARKERS]
 
+LINE_FORBIDDEN_KEYWORDS = {
+    "政治面貌",
+    "婚姻状况",
+    "兴趣爱好",
+    "掌握技能",
+    "技能特长",
+    "资格证书",
+    "证书",
+    "荣誉奖项",
+    "求职意向",
+    "职业目标",
+    "薪资",
+    "期望",
+    "现居地",
+    "现住址",
+    "联系地址",
+    "家庭住址",
+    "教育经历",
+    "教育背景",
+    "毕业院校",
+    "毕业学校",
+    "毕业时间",
+    "工作经历",
+    "项目经历",
+    "项目经验",
+    "自我评价",
+    "自我介绍",
+    "个人简介",
+    "亮点",
+    "摘要",
+    "优势",
+    "劣势",
+    "兴趣特长",
+    "特长",
+    "证件",
+    "身份证",
+    "护照",
+    "社保",
+    "紧急联系人",
+    "照片",
+    "形象照",
+    "作品集",
+    "链接",
+    "作品链接",
+    "公众号",
+    "网站",
+    "平台",
+    "掌握工具",
+    "软件技能",
+    "职业标签",
+    "核心竞争力",
+    "政治立场",
+    "党员",
+    "团员",
+    "群众",
+    "家庭成员",
+    "个人情况",
+    "人际关系",
+    "特性描述",
+    "性格",
+    "MBTI",
+    "血型",
+    "健康状况",
+}
+
+COMMON_SURNAME_TOKENS = """
+赵 钱 孙 李 周 吴 郑 王 冯 陈 褚 卫 蒋 沈 韩 杨 朱 秦 尤 许 何 吕 施 张
+孔 曹 严 华 金 魏 陶 姜 戚 谢 邹 喻 柏 水 窦 章 云 苏 潘 葛 奚 范 彭 郎 鲁
+韦 昌 马 苗 凤 花 方 俞 任 袁 柳 酆 鲍 史 唐 费 廉 岑 薛 雷 贺 倪 汤 滕
+殷 罗 毕 郝 邬 安 常 乐 于 时 傅 皮 卞 齐 康 伍 余 元 卜 顾 孟 平 黄 和
+穆 萧 尹 姚 邵 湛 汪 祁 毛 禹 狄 米 贝 明 臧 计 伏 成 戴 谈 宋 茅 庞 熊
+纪 舒 屈 项 祝 董 梁 杜 阮 蓝 闵 席 季 麻 强 贾 路 娄 危 江 童 颜 郭 梅
+盛 林 刁 钟 徐 邱 骆 高 夏 蔡 田 樊 胡 凌 霍 虞 万 支 柯 昝 管 卢 莫 经
+房 裘 缪 干 解 应 宗 丁 宣 贲 邓 郁 单 杭 洪 包 诸 左 石 崔 吉 钮 龚 程
+嵇 邢 滑 裴 陆 荣 翁 荀 羊 於 惠 甄 曲 家 封 芮 羿 储 靳 汲 邴 糜 松 井
+段 富 巫 乌 焦 巴 弓 牧 隗 山 谷 车 侯 宓 蓬 全 郗 班 仰 秋 仲 伊 宫 宁 仇
+栾 暴 甘 钭 厉 戎 祖 武 符 刘 景 詹 束 龙 叶 幸 司 韶 郜 黎 蓟 薄 印 宿
+白 怀 蒲 邰 从 鄂 索 咸 籍 赖 卓 蔺 屠 蒙 池 乔 阴 鬱 胥 能 苍 双 闻 莘
+党 翟 谭 贡 劳 逄 姬 申 扶 堵 冉 宰 郦 雍 郤 璩 桑 桂 濮 牛 寿 通 边 扈
+燕 冀 郏 浦 尚 农 温 别 庄 晏 柴 瞿 阎 充 慕 连 茹 习 宦 艾 鱼 容 向 古
+易 慎 戈 廖 庚 终 暨 居 衡 步 都 耿 满 弘 匡 国 文 寇 广 禄 阙 东 欧 殳
+沃 利 蔚 越 夔 隆 师 巩 厍 聂 晁 勾 敖 融 冷 訾 辛 阚 那 简 饶 空 曾 毋
+沙 乜 养 鞠 须 丰 巢 关 蒯 相 查 后 荆 红 游 竺 权 逯 盖 益 桓 公
+万俟 司马 上官 欧阳 夏侯 诸葛 闻人 东方 赫连 皇甫 尉迟 公羊 澹台 公冶
+宗政 濮阳 淳于 单于 太叔 申屠 公孙 仲孙 轩辕 令狐 钟离 宇文 长孙 慕容
+鲜于 闾丘 司徒 司空 亓官 司寇 仉 督 子车 颛孙 端木 巫马 公西 漆雕 乐正
+壤驷 公良 拓跋 夹谷 宰父 谷梁 段干 百里 东郭 南门 呼延 羊舌 微生 梁丘
+左丘 东门 西门 南宫 第五 公仪 梁仲 公户 公玉 公仲 公上 公门 公山 公坚
+谷利 谷利
+"""
+COMMON_SURNAME_CHARS = {token for token in COMMON_SURNAME_TOKENS.split() if len(token) == 1}
+COMMON_DOUBLE_SURNAMES = {token for token in COMMON_SURNAME_TOKENS.split() if len(token) > 1}
+COMMON_SURNAME_CHARS.update({"南", "付", "路", "那", "答", "雍", "覃"})
+
 CONTACT_LINE_HINTS = {
     "手机",
     "电话",
@@ -264,6 +437,37 @@ CONTACT_LINE_HINTS = {
     "mail",
     "wechat",
     "微信",
+}
+
+TITLE_SUFFIXES = (
+    "老师",
+    "同学",
+    "先生",
+    "小姐",
+    "主管",
+    "经理",
+    "顾问",
+    "总监",
+)
+
+IDENTITY_HINTS = {
+    "姓名",
+    "name",
+    "Name",
+    "性别",
+    "男",
+    "女",
+    "年龄",
+    "岁",
+    "出生",
+    "籍贯",
+    "户籍",
+    "民族",
+    "住址",
+    "地址",
+    "联系方式",
+    "个人信息",
+    "基本信息",
 }
 
 CONTACT_PHONE_PATTERN = re.compile(r"(?:\+?86[-\s.]*)?(1[3-9]\d{9})")
@@ -308,14 +512,29 @@ def _is_valid_name(token: str) -> bool:
             return True
         return False
     # 中文姓名校验
-    if not (2 <= len(token) <= 6):
-        return False
+    normalized = token.replace("·", "")
     if token in NAME_STOP_WORDS or token in CITY_WORDS:
         return False
     for substr in NAME_DISALLOWED_SUBSTRINGS:
         if substr in token:
             return False
     if _looks_like_suspicious_name(token):
+        return False
+    if not normalized:
+        return False
+    if not re.fullmatch(r"[\u4e00-\u9fa5]+", normalized):
+        return False
+    length = len(normalized)
+    if length < 2 or length > 4:
+        return False
+    prefix2 = normalized[:2]
+    has_double_surname = prefix2 in COMMON_DOUBLE_SURNAMES
+    if length == 3 and has_double_surname:
+        return True
+    if length >= 4 and has_double_surname:
+        return True
+    first_char = normalized[0]
+    if first_char not in COMMON_SURNAME_CHARS:
         return False
     return True
 
@@ -333,7 +552,46 @@ def _clean_candidate_token(token: str) -> str:
         return ""
     token = CONTACT_TAIL_SPLIT.split(token)[0]
     token = re.split(r"[，,。；;、/|]", token)[0]
+    for suffix in TITLE_SUFFIXES:
+        if token.endswith(suffix) and len(token) > len(suffix):
+            stripped = token[: -len(suffix)]
+            if len(stripped) >= 2:
+                token = stripped
+            break
     return _normalize_name_token(token)
+
+
+def _line_has_identity_signal(line: str) -> bool:
+    if not line:
+        return False
+    lowered = line.lower()
+    if re.search(r"(姓\s*名|姓名|name)", lowered):
+        return True
+    if re.search(r"(男|女)", line):
+        return True
+    if re.search(r"\d{2}岁|\d{4}年", line):
+        return True
+    return any(hint.lower() in lowered for hint in IDENTITY_HINTS)
+
+
+def _line_is_mostly_candidate(line: str, candidate: str) -> bool:
+    if not line or not candidate:
+        return False
+    compact = re.sub(r"[\s，,。：:；;、/\\|_()-]+", "", line)
+    return compact == candidate
+
+
+def _looks_like_filename_name(token: str, allow_titles: bool = False) -> bool:
+    if not token:
+        return False
+    if token in NAME_STOP_WORDS or token in CITY_WORDS:
+        return False
+    disallowed = NAME_DISALLOWED_SUBSTRINGS
+    if allow_titles:
+        disallowed = {item for item in NAME_DISALLOWED_SUBSTRINGS if item not in TITLE_SUFFIXES}
+    if any(substr in token for substr in disallowed):
+        return False
+    return bool(re.fullmatch(r"[\u4e00-\u9fa5·]{2,4}", token))
 
 
 def _prepare_lines(text: str) -> List[str]:
@@ -365,8 +623,12 @@ def _extract_candidate_from_line(line: str) -> str:
     normalized_line = line.strip().lower()
     if normalized_line in NAME_SECTION_MARKERS_LOWER:
         return ""
+    if any(keyword in line for keyword in LINE_FORBIDDEN_KEYWORDS):
+        if not re.search(r"(姓\s*名|姓名|name|Name)", line):
+            return ""
     if (":" in line or "：" in line) and any(keyword in line for keyword in SUSPICIOUS_NAME_KEYWORDS):
         return ""
+    identity_signal = _line_has_identity_signal(line)
     labeled_match = re.search(r"(?:姓\s*名|姓名|name|Name)[:：\s]*([A-Za-z\u4e00-\u9fa5·\s]{2,30})", line)
     if labeled_match:
         candidate = _clean_candidate_token(labeled_match.group(1))
@@ -375,7 +637,7 @@ def _extract_candidate_from_line(line: str) -> str:
     for size in range(6, 1, -1):
         for match in re.finditer(r"[\u4e00-\u9fa5·]{" + str(size) + r"}", line):
             candidate = _clean_candidate_token(match.group(0))
-            if _is_valid_name(candidate):
+            if _is_valid_name(candidate) and (identity_signal or _line_is_mostly_candidate(line, candidate)):
                 return candidate
     # 英文姓名在整行内
     english_match = ENGLISH_NAME_ALLOWED.search(line)
@@ -383,7 +645,7 @@ def _extract_candidate_from_line(line: str) -> str:
         candidate = _normalize_name_token(english_match.group(0))
         if candidate.lower() in NAME_SECTION_MARKERS_LOWER:
             return ""
-        if _is_valid_name(candidate):
+        if _is_valid_name(candidate) and (identity_signal or _line_is_mostly_candidate(line, candidate)):
             return candidate
     return ""
 
@@ -414,13 +676,17 @@ def _extract_from_contact_blocks(lines: List[str]) -> str:
                 window.append((pos, lines[pos]))
         for pos, candidate_line in window:
             candidate = _extract_candidate_from_line(candidate_line)
-            if candidate and pos <= idx:
+            if candidate and (pos <= idx or _line_is_mostly_candidate(candidate_line, candidate)):
                 return candidate
         for pos, candidate_line in window:
             tokens = re.findall(r"[\u4e00-\u9fa5·]{2,4}", candidate_line)
+            identity_signal = _line_has_identity_signal(candidate_line)
             for token in tokens:
                 cleaned = _clean_candidate_token(token)
-                if _is_valid_name(cleaned):
+                if not _is_valid_name(cleaned):
+                    continue
+                allow_line = identity_signal or _line_is_mostly_candidate(candidate_line, cleaned)
+                if allow_line:
                     return cleaned
     return ""
 
@@ -521,9 +787,10 @@ def _extract_name_from_text(text: str) -> str:
             continue
         tokens = re.findall(r"[\u4e00-\u9fa5·]{2,6}", line)
         score = _line_score(line)
+        identity_signal = _line_has_identity_signal(line)
         for token in tokens:
             cleaned = _clean_candidate_token(token)
-            if _is_valid_name(cleaned):
+            if _is_valid_name(cleaned) and (identity_signal or _line_is_mostly_candidate(line, cleaned)):
                 candidates.append((cleaned, score))
 
     if candidates:
@@ -534,13 +801,13 @@ def _extract_name_from_text(text: str) -> str:
     return ""
 
 
-def _extract_name_from_filename(filename: str) -> str:
+def _extract_name_from_filename(filename: str, allow_titles: bool = False) -> str:
     raw_stem = Path(filename).stem
     # 常见形式：...】姓名_x年 / ...]姓名
     direct_match = re.search(r"[】\]]\s*([\u4e00-\u9fa5·]{2,6})", raw_stem)
     if direct_match:
         candidate = direct_match.group(1)
-        if _is_valid_name(candidate):
+        if _is_valid_name(candidate) or _looks_like_filename_name(candidate, allow_titles=allow_titles):
             return candidate
 
     stem = raw_stem
@@ -554,13 +821,13 @@ def _extract_name_from_filename(filename: str) -> str:
     tail_match = re.search(r"([\u4e00-\u9fa5·]{2,4})\s*(?:\d{2,4})?(?:版)?$", stem)
     if tail_match:
         candidate = tail_match.group(1)
-        if _is_valid_name(candidate):
+        if _is_valid_name(candidate) or _looks_like_filename_name(candidate, allow_titles=allow_titles):
             return candidate
     for pattern in FILENAME_NAME_PATTERNS:
         match = pattern.search(stem)
         if match:
             candidate = _normalize_name_token(match.group(1))
-            if _is_valid_name(candidate):
+            if _is_valid_name(candidate) or _looks_like_filename_name(candidate, allow_titles=allow_titles):
                 return candidate
 
     # 评分策略：越靠近末尾、后接“年/岁/简历”等词得分越高
@@ -586,8 +853,13 @@ def _extract_name_from_filename(filename: str) -> str:
     if scored:
         scored.sort(key=lambda x: x[1], reverse=True)
         top_candidate, top_score = scored[0]
-        if top_score >= 2:
+        if top_score >= 2 and (_is_valid_name(top_candidate) or _looks_like_filename_name(top_candidate, allow_titles=allow_titles)):
             return top_candidate
+    english_match = re.search(r"([A-Za-z][A-Za-z\s\.\-]{1,30})\s*(?:\d{1,3})?$", stem)
+    if english_match:
+        candidate = _normalize_name_token(english_match.group(1))
+        if _is_valid_name(candidate):
+            return candidate
     return ""
 
 
@@ -601,6 +873,9 @@ def infer_candidate_name(text: str, filename: str) -> str:
     fallback = _extract_name_from_filename(filename)
     if fallback and not _looks_like_suspicious_name(fallback):
         return fallback
+    relaxed = _extract_name_from_filename(filename, allow_titles=True)
+    if relaxed:
+        return relaxed
     return ""
 
 
