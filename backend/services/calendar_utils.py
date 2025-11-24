@@ -32,6 +32,26 @@ def generate_random_string(length: int = 6) -> str:
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
 
 
+SUPPORTED_TZIDS = {"Asia/Shanghai", "Asia/Beijing"}
+
+
+def build_vtimezone_block(tzid: str) -> list[str]:
+    """生成 VTIMEZONE 片段，确保各客户端正确解释 TZID。"""
+    label = tzid if tzid in SUPPORTED_TZIDS else "Asia/Shanghai"
+    return [
+        "BEGIN:VTIMEZONE",
+        f"TZID:{label}",
+        f"X-LIC-LOCATION:{label}",
+        "BEGIN:STANDARD",
+        "TZOFFSETFROM:+0800",
+        "TZOFFSETTO:+0800",
+        "TZNAME:CST",
+        "DTSTART:19700101T000000",
+        "END:STANDARD",
+        "END:VTIMEZONE",
+    ]
+
+
 def create_ics_file(
     title: str,
     start_time: str,
@@ -39,7 +59,8 @@ def create_ics_file(
     attendee: str,
     duration_minutes: int = 45,
     location: str = "",
-    description: str = ""
+    description: str = "",
+    out_dir: str | Path = "reports/invites",
 ) -> str:
     """
     创建 ICS 日历文件（符合 RFC 5545 标准）
@@ -90,11 +111,8 @@ def create_ics_file(
     dtstamp_str = datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')
     
     # 时区处理：确保使用Asia/Shanghai（QQ邮箱、iOS、Android都需要TZID才能显示"加入日历"按钮）
-    timezone_map = {
-        "Asia/Shanghai": "Asia/Shanghai",
-        "Asia/Beijing": "Asia/Shanghai",  # 北京和上海使用同一时区
-    }
-    tzid = timezone_map.get(timezone_str, "Asia/Shanghai")  # 默认使用Asia/Shanghai
+    tzid = timezone_str if timezone_str in SUPPORTED_TZIDS else "Asia/Shanghai"
+    vtimezone_block = build_vtimezone_block(tzid)
     
     # 转义特殊字符（所有字段都必须存在，不能为空）
     summary_escaped = escape_ics_text(title) if title else "面试邀请"
@@ -110,6 +128,7 @@ def create_ics_file(
         "PRODID:-//InterviewAI//Schedule System//CN",
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
+        *vtimezone_block,
         "BEGIN:VEVENT",
         f"UID:{uid}",
         f"DTSTAMP:{dtstamp_str}",
@@ -126,11 +145,11 @@ def create_ics_file(
     ics_content = "\n".join(ics_lines)
     
     # 确保输出目录存在
-    out_dir = Path("reports/invites")
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir_path = Path(out_dir)
+    out_dir_path.mkdir(parents=True, exist_ok=True)
     
     # 保存文件（UTF-8编码，使用 LF 换行符）
-    ics_path = out_dir / f"invite_{uid.replace('@', '_at_').replace(':', '_')}.ics"
+    ics_path = out_dir_path / f"invite_{uid.replace('@', '_at_').replace(':', '_')}.ics"
     # 使用 newline='' 确保写入时使用 LF，而不是系统的默认换行符
     with open(ics_path, 'w', encoding='utf-8', newline='') as f:
         f.write(ics_content)

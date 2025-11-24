@@ -95,7 +95,12 @@ def ai_score_one_ultra(jd_text: str, resume_text: str, job_title: str = "") -> D
             result["resume_mini"] = result.get("summary_short", "") or result.get("ai_resume_summary", "")
         
         # 调试：输出关键字段状态
-        print(f"[DEBUG] Ultra字段状态: ai_review={bool(result.get('ai_review'))}, highlight_tags={len(result.get('highlight_tags', []))}, persona_tags={len(result.get('persona_tags', []))}, strengths_chain={bool(result.get('strengths_reasoning_chain'))}, weaknesses_chain={bool(result.get('weaknesses_reasoning_chain'))}")
+        strengths_chain = result.get('strengths_reasoning_chain', {})
+        weaknesses_chain = result.get('weaknesses_reasoning_chain', {})
+        print(f"[DEBUG] Ultra字段状态: ai_review={bool(result.get('ai_review'))}, highlight_tags={len(result.get('highlight_tags', []))}, persona_tags={len(result.get('persona_tags', []))}", flush=True)
+        print(f"[DEBUG]   strengths_chain存在: {bool(strengths_chain)}, conclusion={strengths_chain.get('conclusion', 'N/A') if isinstance(strengths_chain, dict) else 'N/A'}, ai_reasoning长度={len(strengths_chain.get('ai_reasoning', '')) if isinstance(strengths_chain, dict) else 0}", flush=True)
+        print(f"[DEBUG]   weaknesses_chain存在: {bool(weaknesses_chain)}, conclusion={weaknesses_chain.get('conclusion', 'N/A') if isinstance(weaknesses_chain, dict) else 'N/A'}, ai_reasoning长度={len(weaknesses_chain.get('ai_reasoning', '')) if isinstance(weaknesses_chain, dict) else 0}", flush=True)
+        sys.stdout.flush()
         
         return result
     except Exception as e:
@@ -155,6 +160,8 @@ def ai_match_resumes_df_ultra(jd_text: str, resumes_df: pd.DataFrame, job_title:
         score_result = ai_score_one_ultra(jd_text, resume_text, job_title)
         print(f"[DEBUG] --- 简历{idx}/{total_count}: 评分完成 ---", flush=True)
         print(f"[DEBUG]   ai_review={bool(score_result.get('ai_review'))}", flush=True)
+        print(f"[DEBUG]   strengths_reasoning_chain: conclusion={score_result.get('strengths_reasoning_chain', {}).get('conclusion')}, ai_reasoning长度={len(score_result.get('strengths_reasoning_chain', {}).get('ai_reasoning', ''))}", flush=True)
+        print(f"[DEBUG]   weaknesses_reasoning_chain: conclusion={score_result.get('weaknesses_reasoning_chain', {}).get('conclusion')}, ai_reasoning长度={len(score_result.get('weaknesses_reasoning_chain', {}).get('ai_reasoning', ''))}", flush=True)
         print(f"[DEBUG]   highlight_tags={len(score_result.get('highlight_tags', []))}", flush=True)
         print(f"[DEBUG]   evidence_chains={len(score_result.get('evidence_chains', {}))}", flush=True)
         sys.stdout.flush()
@@ -222,6 +229,7 @@ def ai_match_resumes_df_ultra(jd_text: str, resumes_df: pd.DataFrame, job_title:
             "evidence_text": score_result.get("evidence_text", ""),
             "weak_points": weak_points,  # 列表格式
             "score_dims": score_dims,  # 雷达图数据
+            "standard_model": score_result.get("standard_model", {}),  # 岗位标准能力模型（用于雷达图对比）
             "risks": risks,  # 风险项列表
             "match_level": score_result.get("match_level", "无法评估"),
             "match_summary": score_result.get("match_summary", "") or score_result.get("match_level", "无法评估"),
@@ -252,6 +260,28 @@ def ai_match_resumes_df_ultra(jd_text: str, resumes_df: pd.DataFrame, job_title:
         print(f"  - ai_review: {bool(sample_row.get('ai_review'))}", flush=True)
         print(f"  - highlight_tags: {len(sample_row.get('highlight_tags', []))}", flush=True)
         print(f"  - evidence_chains: {len(sample_row.get('evidence_chains', {}))}", flush=True)
+        
+        # 检查推理链字段
+        strengths_chain = sample_row.get('strengths_reasoning_chain', {})
+        weaknesses_chain = sample_row.get('weaknesses_reasoning_chain', {})
+        print(f"  - strengths_reasoning_chain类型: {type(strengths_chain)}", flush=True)
+        if isinstance(strengths_chain, dict):
+            print(f"  - strengths_reasoning_chain.conclusion: {strengths_chain.get('conclusion', 'N/A')}", flush=True)
+            print(f"  - strengths_reasoning_chain.ai_reasoning长度: {len(strengths_chain.get('ai_reasoning', ''))}", flush=True)
+        elif isinstance(strengths_chain, str):
+            print(f"  - strengths_reasoning_chain是字符串，长度: {len(strengths_chain)}", flush=True)
+        else:
+            print(f"  - strengths_reasoning_chain值: {strengths_chain}", flush=True)
+        
+        print(f"  - weaknesses_reasoning_chain类型: {type(weaknesses_chain)}", flush=True)
+        if isinstance(weaknesses_chain, dict):
+            print(f"  - weaknesses_reasoning_chain.conclusion: {weaknesses_chain.get('conclusion', 'N/A')}", flush=True)
+            print(f"  - weaknesses_reasoning_chain.ai_reasoning长度: {len(weaknesses_chain.get('ai_reasoning', ''))}", flush=True)
+        elif isinstance(weaknesses_chain, str):
+            print(f"  - weaknesses_reasoning_chain是字符串，长度: {len(weaknesses_chain)}", flush=True)
+        else:
+            print(f"  - weaknesses_reasoning_chain值: {weaknesses_chain}", flush=True)
+        
         sys.stdout.flush()
     
     return result

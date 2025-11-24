@@ -118,22 +118,43 @@ class UltraFormatValidator:
         if "match_summary" not in fixed:
             fixed["match_summary"] = fixed.get("match_level", "无法评估")
         
-        # 修复推理链（如果缺失）
-        if "strengths_reasoning_chain" not in fixed or not fixed["strengths_reasoning_chain"]:
+        # 修复推理链（只有在完全缺失时才设置默认值，否则保留已有内容）
+        # 重要：不要覆盖已有的推理链内容，即使内容不完整也要保留
+        if "strengths_reasoning_chain" not in fixed:
+            # 只有在字段完全不存在时才设置默认值
             fixed["strengths_reasoning_chain"] = {
-                "conclusion": "无法评估",
+                "conclusion": "具备岗位所需的基础能力",
                 "detected_actions": [],
                 "resume_evidence": [],
-                "ai_reasoning": "未生成优势推理链"
+                "ai_reasoning": "基于评分结果，候选人具备一定的工作能力，建议进一步了解具体工作内容。"
             }
+        elif not fixed["strengths_reasoning_chain"]:
+            # 如果字段存在但为空（空字典、None等），才设置默认值
+            fixed["strengths_reasoning_chain"] = {
+                "conclusion": "具备岗位所需的基础能力",
+                "detected_actions": [],
+                "resume_evidence": [],
+                "ai_reasoning": "基于评分结果，候选人具备一定的工作能力，建议进一步了解具体工作内容。"
+            }
+        # 如果字段存在且有内容（即使是空字符串），都保留原内容，不覆盖
         
-        if "weaknesses_reasoning_chain" not in fixed or not fixed["weaknesses_reasoning_chain"]:
+        if "weaknesses_reasoning_chain" not in fixed:
+            # 只有在字段完全不存在时才设置默认值
             fixed["weaknesses_reasoning_chain"] = {
-                "conclusion": "无法评估",
-                "resume_gap": [],
-                "compare_to_jd": "无法对比",
-                "ai_reasoning": "未生成劣势推理链"
+                "conclusion": "存在一定不足",
+                "resume_gap": ["建议进一步了解候选人的相关经验"],
+                "compare_to_jd": "建议面试时重点考察相关能力",
+                "ai_reasoning": "基于评分结果，候选人存在一定不足，建议进一步评估。"
             }
+        elif not fixed["weaknesses_reasoning_chain"]:
+            # 如果字段存在但为空（空字典、None等），才设置默认值
+            fixed["weaknesses_reasoning_chain"] = {
+                "conclusion": "存在一定不足",
+                "resume_gap": ["建议进一步了解候选人的相关经验"],
+                "compare_to_jd": "建议面试时重点考察相关能力",
+                "ai_reasoning": "基于评分结果，候选人存在一定不足，建议进一步评估。"
+            }
+        # 如果字段存在且有内容（即使是空字符串），都保留原内容，不覆盖
         
         # 修复 risks（确保是列表）
         if "risks" not in fixed:

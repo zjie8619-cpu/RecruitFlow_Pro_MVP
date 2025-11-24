@@ -50,7 +50,7 @@ class ScoringResult:
     evidence_chain: List[EvidenceItem] = field(default_factory=list)
     risks: List[RiskItem] = field(default_factory=list)
     
-    # 维度分数（0-25）
+    # 维度分数（0-100，百分制）
     skill_match_score: float = 0.0
     experience_match_score: float = 0.0
     stability_score: float = 0.0
@@ -145,7 +145,16 @@ class ScoringGraph:
             result.experience_match_score = dimension_scores["experience_match"]
             result.stability_score = dimension_scores["stability"]
             result.growth_potential_score = dimension_scores["growth_potential"]
-            result.final_score = sum(dimension_scores.values())
+            
+            # 计算总分（加权平均，百分制）
+            # 使用权重矩阵计算加权总分
+            total_score = (
+                dimension_scores["skill_match"] * weight_matrix["skill_match"] +
+                dimension_scores["experience_match"] * weight_matrix["experience_match"] +
+                dimension_scores["stability"] * weight_matrix["stability"] +
+                dimension_scores["growth_potential"] * weight_matrix["growth_potential"]
+            )
+            result.final_score = round(total_score, 1)
             
             # S6: 风险识别
             import sys
@@ -386,48 +395,94 @@ class ScoringGraph:
         scores = {}
         core_abilities = self.ability_pool.get_core_abilities(self.job_title)
         
-        # 技能匹配度（0-25）：关键岗位能力的权重 * 出现次数
-        skill_actions = []
+        # 技能匹配度（0-100，百分制）：基于JD要求的技能与简历动作的匹配度
+        # 首先从JD中提取关键技能要求
+        jd_skill_keywords = []
+        if self.jd_text:
+            # 提取JD中的技能相关句子
+            jd_sentences = re.split(r'[。！？；\n]', self.jd_text)
+            skill_sentences = [s for s in jd_sentences if any(kw in s for kw in ["技能", "能力", "掌握", "熟悉", "精通", "要求", "具备", "擅长"])]
+            for sent in skill_sentences[:15]:  # 技能相关句子
+                # 提取2-4字的关键词
+                keywords = re.findall(r'[\u4e00-\u9fa5]{2,4}', sent)
+                jd_skill_keywords.extend(keywords)
+        
+        # 计算简历动作与JD技能要求的匹配度
+        skill_match_count = 0
+        skill_match_score_detail = 0.0
+        
+        for action in actions:
+            action_text = action.sentence.lower()
+            # 检查动作是否匹配JD技能要求
+            for jd_skill in jd_skill_keywords[:30]:  # 前30个JD技能关键词
+                if jd_skill.lower() in action_text:
+                    skill_match_count += 1
+                    skill_match_score_detail += 1.0
+                    break
+        
+        # 同时考虑岗位核心能力匹配
         skill_ability_counts = {}
         for ability, mapped_actions in ability_mapping.items():
             if ability in core_abilities:
-                skill_actions.extend(mapped_actions)
                 skill_ability_counts[ability] = len(mapped_actions)
         
-        # 计算技能匹配度：核心能力出现次数加权
-        skill_score = 0.0
-        for ability, count in skill_ability_counts.items():
-            # 每个核心能力最多贡献5分
-            skill_score += min(5.0, count * 1.5)
-        skill_score = min(25.0, skill_score)
-        # 如果没有动作，给一个默认分数
+        # 综合计算：JD技能匹配 + 核心能力匹配
+        jd_match_score = min(60.0, skill_match_count * 4.0)  # JD匹配最多60分
+        ability_match_score = min(40.0, sum(min(10.0, count * 3.0) for count in skill_ability_counts.values()))  # 核心能力匹配最多40分
+        skill_score = jd_match_score + ability_match_score
+        skill_score = min(100.0, skill_score)
+        
+        # 如果没有动作，给一个默认分数（百分制）
         if len(actions) == 0:
-            skill_score = 10.0
+            skill_score = 20.0
         scores["skill_match"] = round(skill_score, 1)
         
-        # 经验相关性（0-25）：与岗位JD关键场景匹配程度
-        # 检查JD中的关键场景词
-        jd_keywords = []
+        # 经验相关性（0-100，百分制）：与岗位JD关键场景和工作内容匹配程度
+        # 从JD中提取关键工作场景和职责描述
+        jd_scenario_keywords = []
+        jd_duty_keywords = []
         if self.jd_text:
             jd_sentences = re.split(r'[。！？；\n]', self.jd_text)
-            for sent in jd_sentences[:10]:  # 前10句
-                jd_keywords.extend(re.findall(r'[\u4e00-\u9fa5]{2,}', sent))
+            # 提取职责相关句子
+            duty_sentences = [s for s in jd_sentences if any(kw in s for kw in ["负责", "工作", "职责", "任务", "内容", "场景", "业务"])]
+            for sent in duty_sentences[:20]:  # 职责相关句子
+                # 提取2-5字的关键词
+                keywords = re.findall(r'[\u4e00-\u9fa5]{2,5}', sent)
+                jd_duty_keywords.extend(keywords)
+            # 提取所有句子中的关键词
+            for sent in jd_sentences[:15]:
+                keywords = re.findall(r'[\u4e00-\u9fa5]{2,4}', sent)
+                jd_scenario_keywords.extend(keywords)
         
-        # 计算简历动作与JD的匹配度
-        match_count = 0
+        # 计算简历动作与JD场景/职责的匹配度
+        scenario_match_count = 0
+        duty_match_count = 0
+        
         for action in actions:
-            for keyword in jd_keywords[:20]:  # 前20个关键词
-                if keyword in action.sentence:
-                    match_count += 1
+            action_text = action.sentence.lower()
+            # 检查是否匹配JD场景关键词
+            for keyword in jd_scenario_keywords[:40]:
+                if keyword.lower() in action_text:
+                    scenario_match_count += 1
+                    break
+            # 检查是否匹配JD职责关键词
+            for keyword in jd_duty_keywords[:30]:
+                if keyword.lower() in action_text:
+                    duty_match_count += 1
                     break
         
-        exp_score = min(25.0, (match_count * 2.0) + (len(actions) * 0.8))
-        # 如果没有动作，给一个默认分数
+        # 综合计算：场景匹配 + 职责匹配
+        scenario_score = min(50.0, scenario_match_count * 3.0)  # 场景匹配最多50分
+        duty_score = min(50.0, duty_match_count * 4.0)  # 职责匹配最多50分
+        exp_score = scenario_score + duty_score
+        exp_score = min(100.0, exp_score)
+        
+        # 如果没有动作，给一个默认分数（百分制）
         if len(actions) == 0:
-            exp_score = 10.0
+            exp_score = 20.0
         scores["experience_match"] = round(exp_score, 1)
         
-        # 稳定性（0-25）：岗位跨度 + 在职时长 + 跳槽频率
+        # 稳定性（0-100，百分制）：岗位跨度 + 在职时长 + 跳槽频率
         # 从简历文本中提取工作年限
         years_match = re.search(r'(\d+)[年岁]', self.jd_text + " " + str(actions[0].sentence if actions else ""))
         years = float(years_match.group(1)) if years_match else 3.0
@@ -437,28 +492,29 @@ class ScoringGraph:
         company_count = max(1, company_count)
         job_span = years / company_count if company_count > 0 else years
         
-        # 稳定性评分：工作年限越长、跳槽越少，分数越高
+        # 稳定性评分：工作年限越长、跳槽越少，分数越高（转换为百分制）
         if job_span >= 3:
-            stability_score = 20.0
+            stability_score = 80.0
         elif job_span >= 2:
-            stability_score = 15.0
+            stability_score = 60.0
         elif job_span >= 1:
-            stability_score = 10.0
+            stability_score = 40.0
         else:
-            stability_score = 5.0
+            stability_score = 20.0
         
         scores["stability"] = round(stability_score, 1)
         
-        # 成长潜力（0-25）：晋升/跨部门/项目经验
+        # 成长潜力（0-100，百分制）：晋升/跨部门/项目经验
         growth_keywords = ["学习", "培训", "复盘", "总结", "改进", "优化", "提升", "晋升", "跨部门", "项目"]
         growth_indicators = ["晋升", "提升", "优化", "改进", "跨", "项目", "负责", "带领"]
         growth_count = sum(1 for action in actions if any(kw in action.sentence for kw in growth_keywords))
         growth_indicators_count = sum(1 for action in actions if any(ind in action.sentence for ind in growth_indicators))
         
-        growth_score = min(25.0, (growth_count * 2.5) + (growth_indicators_count * 1.5) + (len(actions) > 8) * 3.0)
-        # 如果没有动作，给一个默认分数
+        # 转换为百分制：每个成长关键词贡献10分，每个成长指标贡献6分，动作数量多时额外12分
+        growth_score = min(100.0, (growth_count * 10.0) + (growth_indicators_count * 6.0) + (len(actions) > 8) * 12.0)
+        # 如果没有动作，给一个默认分数（百分制）
         if len(actions) == 0:
-            growth_score = 10.0
+            growth_score = 40.0
         scores["growth_potential"] = round(growth_score, 1)
         
         return scores
@@ -481,8 +537,8 @@ class ScoringGraph:
                 severity="high"
             ))
         
-        # 检查分数分布
-        if scores["skill_match"] < 10:
+        # 检查分数分布（百分制阈值调整）
+        if scores["skill_match"] < 40:
             risks.append(RiskItem(
                 risk_type="技能匹配度低",
                 evidence=f"技能匹配度仅{scores['skill_match']}分",
@@ -490,7 +546,7 @@ class ScoringGraph:
                 severity="high"
             ))
         
-        if scores["stability"] < 10:
+        if scores["stability"] < 40:
             risks.append(RiskItem(
                 risk_type="稳定性风险",
                 evidence=f"稳定性评分仅{scores['stability']}分",
