@@ -16,7 +16,7 @@ class UltraScoringEngine:
         self.job_title = job_title
         self.jd_text = jd_text
         self.scoring_graph = ScoringGraph(job_title, jd_text)
-        self.field_generators = FieldGenerators(job_title)
+        self.field_generators = FieldGenerators(job_title, jd_text)
         self.parser = RobustParser()
     
     def score(self, resume_text: str) -> Dict[str, Any]:

@@ -3,18 +3,34 @@
 """
 
 import re
+import json
+import textwrap
 from typing import Dict, List, Any
 from backend.services.scoring_graph import ScoringResult, DetectedAction, EvidenceItem, RiskItem
 from backend.services.ability_pool import AbilityPool, ActionMapping
+from backend.services.ai_client import get_client_and_cfg, chat_completion
 
 
 class FieldGenerators:
     """字段生成器"""
     
-    def __init__(self, job_title: str):
+    def __init__(self, job_title: str, jd_text: str = ""):
         self.job_title = job_title
+        self.jd_text = jd_text
         self.ability_pool = AbilityPool()
         self.action_mapping = ActionMapping()
+        self._llm_client = None
+        self._llm_cfg = None
+    
+    def _get_llm_client(self):
+        """获取LLM客户端（延迟初始化）"""
+        if self._llm_client is None:
+            try:
+                self._llm_client, self._llm_cfg = get_client_and_cfg()
+            except Exception as e:
+                print(f"[WARNING] 无法获取LLM客户端: {str(e)}，将使用规则生成")
+                return None, None
+        return self._llm_client, self._llm_cfg
     
     def generate_ai_review(
         self,
@@ -26,11 +42,19 @@ class FieldGenerators:
         """
         生成 AI 评价（Ultra Version）
         
-        结构：
-        ① 证据段：引用动作和证据
-        ② 推理段：使用权重模型，引用能力维度差异
-        ③ 结论段：基于 final_score 调用模板
+        优先使用LLM生成，失败时回退到规则生成
         """
+        # 尝试使用LLM生成
+        try:
+            client, cfg = self._get_llm_client()
+            if client and cfg:
+                return self._generate_ai_review_with_llm(
+                    client, cfg, scoring_result, detected_actions, evidence_chain, risks
+                )
+        except Exception as e:
+            print(f"[WARNING] LLM生成ai_review失败: {str(e)}，回退到规则生成", flush=True)
+        
+        # 回退到规则生成
         # ① 证据段
         evidence_section = self._build_evidence_section(detected_actions, evidence_chain, risks)
         
@@ -44,6 +68,102 @@ class FieldGenerators:
         review = f"{evidence_section}\n\n{reasoning_section}\n\n{conclusion_section}"
         
         return review.strip()
+    
+    def _generate_ai_review_with_llm(
+        self,
+        client,
+        cfg,
+        scoring_result: ScoringResult,
+        detected_actions: List[DetectedAction],
+        evidence_chain: List[EvidenceItem],
+        risks: List[RiskItem]
+    ) -> str:
+        """使用LLM生成AI评价"""
+        # 构建证据摘要
+        evidence_summary = []
+        for ev in evidence_chain[:5]:
+            if ev.resume_quote:
+                evidence_summary.append(f"- {ev.action}: {ev.resume_quote[:100]}")
+        
+        # 构建动作摘要
+        actions_summary = []
+        for action in detected_actions[:5]:
+            if action.sentence:
+                actions_summary.append(f"- {action.sentence[:100]}")
+        
+        scores = {
+            "技能匹配度": scoring_result.skill_match_score,
+            "经验相关性": scoring_result.experience_match_score,
+            "稳定性": scoring_result.stability_score,
+            "成长潜力": scoring_result.growth_potential_score,
+        }
+        
+        prompt = textwrap.dedent(f"""
+        你是一名专业的AI招聘评估官。请基于以下信息生成结构化的AI评价。
+
+        【岗位名称】
+        {self.job_title}
+
+        【岗位JD】
+        {self.jd_text[:500] if self.jd_text else "未提供详细JD"}
+
+        【候选人得分】
+        {json.dumps(scores, ensure_ascii=False, indent=2)}
+        总分: {scoring_result.final_score}
+
+        【检测到的动作】
+        {chr(10).join(actions_summary[:5]) if actions_summary else "无"}
+
+        【证据链】
+        {chr(10).join(evidence_summary[:5]) if evidence_summary else "无"}
+
+        【风险项】
+        {chr(10).join([f"- {r.risk_type}: {r.evidence[:100]}" for r in risks[:3]]) if risks else "无"}
+
+        ----------------------------------------------
+        【输出要求】
+        ----------------------------------------------
+        请严格按照以下三段式结构输出，不要添加额外内容：
+
+        【证据】
+        （列出3-5条最重要的证据，每条为完整句子，引用简历原文）
+
+        【推理】
+        （分析各维度得分原因，使用25分制，说明为什么得分高或低）
+
+        【结论】
+        （基于总分给出推荐结论：强烈推荐/推荐/谨慎推荐/淘汰）
+
+        ----------------------------------------------
+        【注意事项】
+        ----------------------------------------------
+        1. 所有证据必须来自上述"检测到的动作"和"证据链"
+        2. 推理部分必须明确说明各维度得分（使用25分制）
+        3. 结论必须基于总分给出明确的推荐建议
+        4. 不要输出JSON格式，直接输出文本
+        5. 确保格式清晰，每段之间有换行
+        """)
+        
+        try:
+            response = chat_completion(
+                client,
+                cfg,
+                messages=[
+                    {"role": "system", "content": "你是一名专业的AI招聘评估官，能够生成结构化的候选人评价。"},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.7,
+                max_tokens=800,
+            )
+            content = response["choices"][0]["message"]["content"]
+            # 验证输出格式
+            if "【证据】" in content and "【推理】" in content and "【结论】" in content:
+                return content.strip()
+            else:
+                # 如果格式不对，回退到规则生成
+                raise ValueError("LLM输出格式不正确")
+        except Exception as e:
+            raise Exception(f"LLM调用失败: {str(e)}")
     
     def _build_evidence_section(
         self,
