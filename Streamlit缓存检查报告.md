@@ -192,3 +192,4 @@ dir
 - Plotly: 6.5.0
 - Kaleido: 1.2.0
 
+----
